@@ -1,0 +1,40 @@
+const express = require('express');
+const router = express.Router();
+const db = require('../models/database');
+const { startScheduler, stopScheduler, runScan, getSchedulerStatus } = require('../services/schedulerService');
+
+// 获取所有设置
+router.get('/', (req, res) => {
+  // 过滤敏感信息后返回
+  const settings = db.getAllSettings();
+  res.json({ success: true, data: settings });
+});
+
+// 更新设置
+router.put('/', (req, res) => {
+  const updates = req.body;
+  for (const [key, value] of Object.entries(updates)) {
+    db.setSetting(key, String(value));
+  }
+
+  // 如果更新了爬取间隔，重启调度器
+  if (updates.crawler_interval) {
+    startScheduler(parseInt(updates.crawler_interval));
+  }
+
+  res.json({ success: true, data: db.getAllSettings() });
+});
+
+// 获取调度器状态
+router.get('/scheduler-status', (req, res) => {
+  res.json({ success: true, data: getSchedulerStatus() });
+});
+
+// 手动触发扫描
+router.post('/trigger-scan', async (req, res) => {
+  res.json({ success: true, message: '扫描已启动，请查看日志' });
+  // 异步执行，不阻塞响应
+  runScan().catch(err => console.error('[Manual Scan] Error:', err));
+});
+
+module.exports = router;
