@@ -4,3 +4,5 @@ dist/
 *.db
 *.db-journal
 *.db-wal
+
+.vite/

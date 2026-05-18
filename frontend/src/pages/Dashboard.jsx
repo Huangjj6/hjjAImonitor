@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import HotspotTimeline from '../components/HotspotTimeline';
+import { StatCard } from '../components/ui/glowing-effect';
 import { useApi } from '../hooks/useApi';
+import { cn } from '../lib/utils';
 
 function timeAgo(dateStr) {
   if (!dateStr) return '--';
@@ -13,13 +15,29 @@ function timeAgo(dateStr) {
   return `${Math.floor(hours / 24)}天前`;
 }
 
+function AnimatedNumber({ value }) {
+  const [display, setDisplay] = useState(0);
+  useEffect(() => {
+    if (value === display) return;
+    const step = Math.max(1, Math.ceil(Math.abs(value - display) / 10));
+    const timer = setInterval(() => {
+      setDisplay(prev => {
+        if (Math.abs(value - prev) <= step) return value;
+        return prev + (value > prev ? step : -step);
+      });
+    }, 40);
+    return () => clearInterval(timer);
+  }, [value]);
+  return <>{display}</>;
+}
+
 export default function Dashboard({ notification, onDismissNotification }) {
   const { get, post } = useApi();
   const [hotspots, setHotspots] = useState([]);
   const [keywords, setKeywords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [lastScan, setLastScan] = useState(null);
-  const prevCountRef = useRef(0);
+  const [pulseKey, setPulseKey] = useState(0);
 
   const loadData = useCallback(async () => {
     const [hotRes, kwRes] = await Promise.all([
@@ -30,6 +48,7 @@ export default function Dashboard({ notification, onDismissNotification }) {
     if (kwRes?.success) setKeywords(kwRes.data);
     setLastScan(new Date().toISOString());
     setLoading(false);
+    setPulseKey(k => k + 1);
   }, [get]);
 
   useEffect(() => {
@@ -62,85 +81,64 @@ export default function Dashboard({ notification, onDismissNotification }) {
   }, {});
   const topSource = Object.entries(sourceDist).sort((a, b) => b[1] - a[1])[0];
 
-  // 最新热点
-  const latest = hotspots[0];
-
-  const statCards = [
-    {
-      label: '已发现',
-      value: hotspots.length,
-      sub: `最近 ${timeAgo(lastScan)} 刷新`,
-      color: 'from-sky-500/20 to-indigo-500/10',
-      icon: '📡',
-      iconBg: 'bg-sky-500/10',
-    },
-    {
-      label: '已确认',
-      value: verified.length,
-      sub: avgScore > 0 ? `平均相关度 ${avgScore}%` : '等待 AI 验证',
-      color: 'from-emerald-500/20 to-teal-500/10',
-      icon: '✅',
-      iconBg: 'bg-emerald-500/10',
-    },
-    {
-      label: '已过滤',
-      value: fakes.length,
-      sub: fakes.length > 0 ? 'AI 自动识别虚假内容' : '暂无虚假内容',
-      color: 'from-rose-500/20 to-pink-500/10',
-      icon: '🛡️',
-      iconBg: 'bg-rose-500/10',
-    },
-    {
-      label: '监控词',
-      value: enabledKw,
-      sub: `${keywords.length} 个关键词，${enabledKw} 个启用`,
-      color: 'from-amber-500/20 to-orange-500/10',
-      icon: '🎯',
-      iconBg: 'bg-amber-500/10',
-    },
+  const stats = [
+    { label: '已发现', value: hotspots.length, sub: `最近 ${timeAgo(lastScan)} 刷新`, icon: '📡', accent: 'cyan' },
+    { label: '已确认', value: verified.length, sub: avgScore > 0 ? `平均相关度 ${avgScore}%` : '等待 AI 验证', icon: '✅', accent: 'emerald' },
+    { label: '已过滤', value: fakes.length, sub: fakes.length > 0 ? 'AI 自动识别虚假内容' : '暂无虚假内容', icon: '🛡️', accent: 'rose' },
+    { label: '监控词', value: enabledKw, sub: `${keywords.length} 个关键词，${enabledKw} 个启用`, icon: '🎯', accent: 'amber' },
   ];
 
+  const latestHotspot = hotspots.length > 0 ? hotspots[0] : null;
+
   return (
-    <div className="space-y-5 animate-fade-in">
-      {/* Bento Grid: Stats + Source */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {statCards.map((s) => (
-          <div
+    <div className="h-full flex flex-col space-y-3 animate-fade-in overflow-hidden">
+      {/* Stats Grid */}
+      <div className="flex-shrink-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {stats.map((s) => (
+          <StatCard
             key={s.label}
-            className="group relative overflow-hidden rounded-2xl bg-white/[0.02] border border-white/[0.04] hover:border-white/[0.08] transition-all duration-500 p-5"
-          >
-            <div className={`absolute inset-0 bg-gradient-to-br ${s.color} opacity-0 group-hover:opacity-100 transition-opacity duration-500`} />
-            <div className="relative z-10">
-              <div className={`w-8 h-8 rounded-xl ${s.iconBg} flex items-center justify-center text-sm mb-3`}>
-                {s.icon}
-              </div>
-              <div className="text-2xl font-bold text-white tracking-tight font-mono tabular-nums">
-                {s.value}
-              </div>
-              <div className="text-[11px] text-white/40 mt-1 font-medium">{s.label}</div>
-              <div className="text-[10px] text-white/15 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                {s.sub}
-              </div>
-            </div>
-          </div>
+            icon={s.icon}
+            label={s.label}
+            value={<AnimatedNumber value={s.value} />}
+            sub={s.sub}
+            accent={s.accent}
+          />
         ))}
       </div>
 
-      {/* Main Content: Timeline (full width, clean) */}
-      <div className="rounded-2xl bg-white/[0.01] border border-white/[0.03] p-5 sm:p-6">
-        <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
-          <div>
+      {/* Timeline - fills remaining space */}
+      <div className="flex-1 min-h-0 flex flex-col rounded-2xl border border-white/[0.10] bg-white/[0.04] hover:border-indigo-500/10 transition-all duration-500 shadow-[0_4px_16px_rgba(0,0,0,0.22)] p-5 sm:p-6">
+        <div className="flex-shrink-0 flex items-center justify-between mb-1 flex-wrap gap-2">
+          <div className="flex-1 min-w-0">
             <h2 className="text-sm font-semibold text-white/70 flex items-center gap-2">
-              📡 热点时间线
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+              热点时间线
             </h2>
-            <p className="text-[11px] text-white/20 mt-0.5">
-              {topSource
-                ? `主要来源: ${topSource[0]} (${topSource[1]}条)`
-                : '等待数据...'}
-            </p>
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
+              <p className="text-[11px] text-white/20">
+                {topSource
+                  ? `主要来源: ${topSource[0]} (${topSource[1]}条)`
+                  : '等待数据...'}
+              </p>
+              {latestHotspot && (
+                <>
+                  <span className="text-[10px] text-white/10">|</span>
+                  <span className="text-[10px] text-emerald-400/60 font-medium flex items-center gap-1">
+                    <span className="text-[11px]">🔥</span>
+                    最新: 
+                    <span className="text-white/40 truncate max-w-[200px] inline-block align-bottom">
+                      {latestHotspot.title}
+                    </span>
+                  </span>
+                  <span className="text-[10px] text-white/15 font-mono">
+                    {timeAgo(latestHotspot.discovered_at)}
+                  </span>
+                </>
+              )}
+            </div>
           </div>
         </div>
-        <div className="mt-4 max-h-[calc(100vh-380px)]">
+        <div className="flex-1 min-h-0 mt-3">
           <HotspotTimeline
             hotspots={hotspots}
             loading={loading}

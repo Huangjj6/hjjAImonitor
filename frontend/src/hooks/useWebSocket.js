@@ -32,12 +32,6 @@ export function useWebSocket() {
           const msg = JSON.parse(event.data);
           if (msg.type === 'notification') {
             setLastNotification(msg.data);
-            if (Notification.permission === 'granted') {
-              new Notification('🔍 新热点发现!', {
-                body: msg.data.title?.substring(0, 100),
-                tag: msg.data.id,
-              });
-            }
           }
         } catch (e) { /* ignore */ }
       };
@@ -64,9 +58,6 @@ export function useWebSocket() {
 
   useEffect(() => {
     mountedRef.current = true;
-    if (Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
 
     const initTimer = setTimeout(() => connect(), 2000);
 

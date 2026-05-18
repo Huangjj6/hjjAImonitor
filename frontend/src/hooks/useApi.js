@@ -3,11 +3,20 @@ import { useState, useCallback } from 'react';
 const BASE = '/api';
 
 async function request(url, options = {}) {
-  const res = await fetch(`${BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
-  return res.json();
+  try {
+    const res = await fetch(`${BASE}${url}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { success: false, error: 'Invalid response' };
+    }
+  } catch {
+    return { success: false, error: 'Network error' };
+  }
 }
 
 export function useApi() {
