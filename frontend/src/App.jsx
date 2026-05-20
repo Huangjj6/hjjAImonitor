@@ -11,6 +11,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [keywords, setKeywords] = useState([]);
   const [notificationCount, setNotificationCount] = useState(0);
+  const [scanning, setScanning] = useState(false);
   const { connected, lastNotification, setLastNotification } = useWebSocket();
   const { get, post, put, del, loading } = useApi();
 
@@ -43,13 +44,20 @@ export default function App() {
   };
 
   const handleToggleKeyword = async (id, enabled) => {
-    await put(`/keywords/${id}`, { enabled });
-    await loadKeywords();
+    // 乐观更新：立即切换 UI
+    setKeywords(prev => prev.map(k => k.id === id ? { ...k, enabled: enabled ? 1 : 0 } : k));
+    // 后台同步
+    const res = await put(`/keywords/${id}`, { enabled });
+    if (!res.success) {
+      // 失败回滚
+      setKeywords(prev => prev.map(k => k.id === id ? { ...k, enabled: enabled ? 0 : 1 } : k));
+    }
   };
 
   const handleDeleteKeyword = async (id) => {
-    await del(`/keywords/${id}`);
-    await loadKeywords();
+    setKeywords(prev => prev.filter(k => k.id !== id));
+    const res = await del(`/keywords/${id}`);
+    if (!res.success) await loadKeywords();
   };
 
   return (
@@ -79,6 +87,8 @@ export default function App() {
               onToggle={handleToggleKeyword}
               onDelete={handleDeleteKeyword}
               loading={loading}
+              scanning={scanning}
+              onScanningChange={setScanning}
             />
           )}
         </main>

@@ -37,6 +37,7 @@ function initTables() {
       id TEXT PRIMARY KEY,
       keyword TEXT NOT NULL UNIQUE,
       category TEXT DEFAULT 'general',
+      keyword_type TEXT DEFAULT 'topic',
       enabled INTEGER DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
@@ -193,8 +194,42 @@ function markHotspotFake(id, reason) {
 }
 
 function urlAlreadyExists(url) {
-  const row = queryOne('SELECT id FROM hotspots WHERE url = ?', [url]);
+  // 仅检查24小时内的URL，避免永久去重导致无法发现新讨论
+  const row = queryOne(
+    "SELECT id FROM hotspots WHERE url = ? AND discovered_at > datetime('now', '-1 day')",
+    [url]
+  );
   return !!row;
+}
+
+/**
+ * 按标题模糊去重：24小时内相似标题视为重复
+ * 支持中英文，忽略标点空格差异，子串匹配
+ */
+function titleAlreadyExists(title) {
+  if (!title || title.length < 5) return false;
+  const clean = t => t.replace(/[^\w\u4e00-\u9fff]/g, '').toLowerCase().trim();
+  const cleaned = clean(title);
+  if (!cleaned) return false;
+
+  const rows = queryAll(
+    "SELECT title FROM hotspots WHERE discovered_at > datetime('now', '-1 day')"
+  );
+  for (const row of rows) {
+    const existing = clean(row.title);
+    if (!existing) continue;
+    // 互相包含 → 重复
+    if (cleaned.includes(existing) || existing.includes(cleaned)) return true;
+    // 短文本（<20字）用最长公共子串大于60%判断
+    if (cleaned.length < 20 || existing.length < 20) {
+      let common = 0;
+      for (let i = 0; i < Math.min(cleaned.length, existing.length); i++) {
+        if (cleaned[i] === existing[i]) common++;
+      }
+      if (common / Math.max(cleaned.length, existing.length) > 0.6) return true;
+    }
+  }
+  return false;
 }
 
 // --- Notifications ---
@@ -248,6 +283,7 @@ module.exports = {
   markHotspotVerified,
   markHotspotFake,
   urlAlreadyExists,
+  titleAlreadyExists,
   addNotification,
   getRecentNotifications,
   getSetting,

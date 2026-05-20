@@ -3,6 +3,33 @@ const cheerio = require('cheerio');
 const config = require('../config');
 
 /**
+ * 统一 URL 规范化：处理搜索引擎重定向链接 & 相对路径
+ */
+function normalizeUrl(rawUrl, source) {
+  if (!rawUrl) return '';
+  let url = rawUrl.trim();
+
+  // DuckDuckGo 重定向解密
+  if (url.startsWith('/l/?uddg=')) {
+    try {
+      url = decodeURIComponent(url.replace('/l/?uddg=', ''));
+    } catch { /* ignore */ }
+  }
+
+  // 搜狗搜索结果中的相对重定向链接 → 补全为绝对 URL
+  if (source === '搜狗搜索' && url.startsWith('/')) {
+    url = `https://www.sogou.com${url}`;
+  }
+
+  // 通用兜底：如果仍不是 http 开头则丢弃
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    return '';
+  }
+
+  return url;
+}
+
+/**
  * DuckDuckGo HTML 搜索（免费、无需 API Key、不被墙）
  */
 async function searchWeb(keyword) {
@@ -17,7 +44,7 @@ async function searchWeb(keyword) {
         'Accept': 'text/html',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       },
-      timeout: 15000,
+      timeout: 8000,
     });
 
     const $ = cheerio.load(response.data);
@@ -36,9 +63,11 @@ async function searchWeb(keyword) {
       }
 
       if (title && link) {
+        const cleanUrl = normalizeUrl(link, 'DuckDuckGo');
+        if (!cleanUrl) return;
         results.push({
           title: cleanHtml(title),
-          url: link,
+          url: cleanUrl,
           source: 'DuckDuckGo',
           summary: cleanHtml(summary).substring(0, 300),
           published_at: new Date().toISOString(),
@@ -166,7 +195,32 @@ async function searchSogou(keyword) {
     });
 
     const $ = cheerio.load(response.data);
-    const resultsList = $('.results .vrwrap, .results .rb');
+    // 多种选择器覆盖不同页面结构
+    const resultsList = $('.results .vrwrap, .results .rb, .vrwrap, .rb, .result, .res-item');
+
+    if (resultsList.length === 0) {
+      console.warn(`[Crawler] 搜狗 页面结构可能变化，尝试通用选择器`);
+      // 备用：直接找所有带链接的标题
+      $('h3 a, .vr-title a, .pt a, a[href*="http"]').each((i, el) => {
+        if (i >= config.crawler.maxResultsPerSource) return false;
+        const $el = $(el);
+        const title = $el.text().trim();
+        const link = $el.attr('href') || '';
+        if (title && link && !link.startsWith('javascript') && link.length > 20 && results.length < config.crawler.maxResultsPerSource) {
+          const cleanUrl = normalizeUrl(link, '搜狗搜索');
+          if (!cleanUrl) return;
+          results.push({
+            title: cleanHtml(title),
+            url: cleanUrl,
+            source: '搜狗搜索',
+            summary: '',
+            published_at: new Date().toISOString(),
+          });
+        }
+      });
+      console.log(`[Crawler] 搜狗(fallback) for "${keyword}" => ${results.length} results`);
+      return results;
+    }
 
     resultsList.each((i, el) => {
       if (i >= config.crawler.maxResultsPerSource) return false;
@@ -177,9 +231,11 @@ async function searchSogou(keyword) {
                     || $(el).find('.abstract, .str-text').text().trim();
 
       if (title && link && !link.startsWith('javascript')) {
+        const cleanUrl = normalizeUrl(link, '搜狗搜索');
+        if (!cleanUrl) return;
         results.push({
           title: cleanHtml(title),
-          url: link,
+          url: cleanUrl,
           source: '搜狗搜索',
           summary: cleanHtml(summary).substring(0, 300),
           published_at: new Date().toISOString(),
@@ -208,22 +264,25 @@ async function searchBilibili(keyword) {
     const response = await axios.get(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://www.bilibili.com',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Referer': 'https://search.bilibili.com/all?keyword=' + query,
+        'Origin': 'https://search.bilibili.com',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Cookie': 'buvid3=local; b_nut=1700000000; _uuid=local',
       },
-      timeout: 15000,
+      timeout: 10000,
     });
 
     const data = response.data;
     if (data.code !== 0) {
       console.warn(`[Crawler] Bilibili API error: code=${data.code}, msg=${data.message}`);
-      return results;
+      // API 失败 → 尝试 HTML 降级
+      return searchBilibiliHtml(keyword);
     }
 
     const videos = (data.data && data.data.result) || [];
     for (const video of videos) {
-      if (results.length >= config.crawler.maxResultsPerSource) break;
-
+      if (results.length >= 3) break;
       results.push({
         title: cleanHtml(video.title || '').substring(0, 120),
         url: `https://www.bilibili.com/video/${video.bvid || video.aid}`,
@@ -236,6 +295,60 @@ async function searchBilibili(keyword) {
     console.log(`[Crawler] Bilibili for "${keyword}" => ${results.length} results`);
   } catch (err) {
     console.error(`[Crawler] Bilibili error for "${keyword}":`, err.message);
+    // 请求失败 → 尝试 HTML 降级
+    const htmlResults = await searchBilibiliHtml(keyword);
+    results.push(...htmlResults);
+  }
+
+  return results;
+}
+
+/**
+ * Bilibili HTML 搜索降级（当 API 不可用时直接爬搜索页）
+ */
+async function searchBilibiliHtml(keyword) {
+  const results = [];
+  const query = encodeURIComponent(keyword);
+  const url = `https://search.bilibili.com/all?keyword=${query}&order=pubdate`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.bilibili.com',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Cookie': 'buvid3=local; b_nut=1700000000; _uuid=local',
+      },
+      timeout: 15000,
+    });
+
+    const $ = cheerio.load(response.data);
+    const items = $('.video-list .bili-video-card, .bili-video-list .video-item, .search-content .video-list-item');
+
+    items.each((i, el) => {
+      if (i >= 3) return false;
+
+      const titleEl = $(el).find('.bili-video-card__info__tit, .video-title a, .info .title a');
+      const title = titleEl.text().trim();
+      const link = titleEl.attr('href') || '';
+      const href = link.startsWith('http') ? link : `https:${link}`;
+      const desc = $(el).find('.bili-video-card__info__author, .up-name, .des').text().trim();
+
+      if (title && href) {
+        results.push({
+          title: cleanHtml(title).substring(0, 120),
+          url: href,
+          source: 'Bilibili',
+          summary: cleanHtml(desc).substring(0, 300),
+          published_at: new Date().toISOString(),
+        });
+      }
+    });
+
+    console.log(`[Crawler] Bilibili HTML "${keyword}" => ${results.length} results`);
+  } catch (err) {
+    console.error(`[Crawler] Bilibili HTML error:`, err.message);
   }
 
   return results;
@@ -248,7 +361,7 @@ async function searchBilibili(keyword) {
 async function searchHackerNews(keyword) {
   const results = [];
   const query = encodeURIComponent(keyword);
-  const url = `https://hn.algolia.com/api/v1/search?query=${query}&tags=story&hitsPerPage=${config.crawler.maxResultsPerSource}`;
+  const url = `https://hn.algolia.com/api/v1/search?query=${query}&tags=story&hitsPerPage=7`;
 
   try {
     const response = await axios.get(url, {
@@ -296,7 +409,7 @@ async function searchGoogleNews(keyword) {
         'Accept': 'application/rss+xml, application/xml, text/xml',
         'Accept-Language': 'zh-CN,zh;q=0.9',
       },
-      timeout: 15000,
+      timeout: 8000,
     });
 
     const $ = cheerio.load(response.data, { xmlMode: true });
@@ -332,7 +445,7 @@ async function searchGoogleNews(keyword) {
 /**
  * 综合多源爬取
  */
-async function crawlAllSources(keyword, category = 'general') {
+async function crawlAllSources(keyword, category = 'general', keywordType = 'topic') {
   const allResults = [];
   const sources = config.crawler.sources || ['web', 'twitter'];
 
@@ -348,9 +461,18 @@ async function crawlAllSources(keyword, category = 'general') {
   }
   if (sources.includes('bilibili')) {
     tasks.push(searchBilibili(keyword));
+    // Bilibili 人物搜索：仅对 person 类型执行
+    if (keywordType === 'person') {
+      tasks.push(searchBilibiliForPerson(keyword));
+    }
   }
   if (sources.includes('hackernews')) {
     tasks.push(searchHackerNews(keyword));
+  }
+
+  // 人物/组织类关键词：增加针对性搜索
+  if (keywordType === 'organization') {
+    tasks.push(searchOrgInfo(keyword));
   }
 
   const settled = await Promise.allSettled(tasks);
@@ -358,16 +480,36 @@ async function crawlAllSources(keyword, category = 'general') {
     if (r.status === 'fulfilled') allResults.push(...r.value);
   }
 
-  // URL 去重
+  // URL 去重 + 来源自动修正
   const seen = new Set();
   const unique = allResults.filter(item => {
     if (!item.url || seen.has(item.url)) return false;
     seen.add(item.url);
+    // 按 URL 域名自动修正 source
+    item.source = detectSourceByUrl(item.url, item.source);
     return true;
   });
 
   await sleep(config.crawler.requestDelay);
   return unique;
+}
+
+/**
+ * 根据 URL 域名自动修正信息来源
+ */
+function detectSourceByUrl(url, defaultSource) {
+  if (!url) return defaultSource;
+  try {
+    const host = new URL(url).hostname;
+    if (host.includes('bilibili.com')) return 'Bilibili';
+    if (host.includes('zhihu.com')) return '知乎';
+    if (host.includes('weibo.com')) return '微博';
+    if (host.includes('github.com')) return 'GitHub';
+    if (host.includes('twitter.com') || host.includes('x.com')) return 'Twitter/X';
+    if (host.includes('ycombinator.com')) return 'HackerNews';
+    if (host.includes('sogou.com')) return '搜狗搜索';
+  } catch {}
+  return defaultSource;
 }
 
 function cleanHtml(html) {
@@ -382,6 +524,165 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * 人物专题搜索：Bilibili 用户空间
+ * 搜索 UP 主主页，获取简介 + 最新视频
+ */
+async function searchBilibiliForPerson(keyword) {
+  const results = [];
+  const query = encodeURIComponent(keyword);
+  const url = `https://api.bilibili.com/x/web-interface/search/type?search_type=bili_user&keyword=${query}`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://search.bilibili.com/all?keyword=' + query,
+        'Origin': 'https://search.bilibili.com',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Cookie': 'buvid3=local; b_nut=1700000000; _uuid=local',
+      },
+      timeout: 10000,
+    });
+
+    const data = response.data;
+    if (data.code !== 0) {
+      console.warn(`[Crawler] Bilibili 人物API error: code=${data.code}`);
+      return searchBilibiliForPersonHtml(keyword);
+    }
+
+    const users = (data.data && data.data.result) || [];
+    for (const user of users.slice(0, 2)) {
+      results.push({
+        title: `${user.uname} - Bilibili UP主`,
+        url: `https://space.bilibili.com/${user.mid}`,
+        source: 'Bilibili',
+        summary: `简介: ${user.usign || '无'} | 粉丝: ${(user.fans || 0).toLocaleString()} | 视频: ${(user.videos || 0).toLocaleString()}`,
+        published_at: new Date().toISOString(),
+      });
+    }
+
+    console.log(`[Crawler] Bilibili 人物搜索 "${keyword}" => ${results.length} 个用户`);
+  } catch (err) {
+    console.error(`[Crawler] Bilibili 人物搜索 error:`, err.message);
+    const htmlResults = await searchBilibiliForPersonHtml(keyword);
+    results.push(...htmlResults);
+  }
+
+  return results;
+}
+
+/**
+ * Bilibili 用户搜索 HTML 降级
+ */
+async function searchBilibiliForPersonHtml(keyword) {
+  const results = [];
+  const query = encodeURIComponent(keyword);
+  const url = `https://search.bilibili.com/upuser?keyword=${query}`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.bilibili.com',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Cookie': 'buvid3=local; b_nut=1700000000; _uuid=local',
+      },
+      timeout: 15000,
+    });
+
+    const $ = cheerio.load(response.data);
+    const items = $('.user-card, .bili-user-card, .user-item');
+
+    items.each((i, el) => {
+      if (i >= 3) return false;
+      const nameEl = $(el).find('.user-name a, .name a, .title a');
+      const name = nameEl.text().trim();
+      const link = nameEl.attr('href') || '';
+      const fans = $(el).find('.user-fans, .fans').text().trim();
+      const desc = $(el).find('.user-desc, .desc, .sign').text().trim();
+      const href = link.startsWith('http') ? link : `https:${link}`;
+
+      if (name && href) {
+        results.push({
+          title: `${name} - Bilibili UP主`,
+          url: href,
+          source: 'Bilibili',
+          summary: `${fans ? '粉丝: ' + fans : ''} ${desc ? '简介: ' + desc : ''}`.trim(),
+          published_at: new Date().toISOString(),
+        });
+      }
+    });
+
+    console.log(`[Crawler] Bilibili 人物HTML搜索 "${keyword}" => ${results.length} 个用户`);
+  } catch (err) {
+    console.error(`[Crawler] Bilibili 人物HTML搜索 error:`, err.message);
+  }
+
+  return results;
+}
+
+/**
+ * 组织/品牌专题搜索：直接搜索官网 + 百科信息
+ */
+async function searchOrgInfo(keyword) {
+  const results = [];
+  // 优先用搜狗搜索的百科信息
+  const sogouResults = await searchBaiduBaike(keyword);
+  results.push(...sogouResults);
+  console.log(`[Crawler] 组织搜索 "${keyword}" => ${results.length} 条`);
+  return results;
+}
+
+/**
+ * 百度百科搜索（通过搜狗间接访问）
+ */
+async function searchBaiduBaike(keyword) {
+  const results = [];
+  const query = encodeURIComponent(keyword);
+  const url = `https://www.sogou.com/web?query=${query}+百科`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+      },
+      timeout: 10000,
+    });
+
+    const $ = cheerio.load(response.data);
+    const baikeLinks = $('a[href*="baike.sogou.com"], a[href*="baike.baidu.com"]');
+
+    baikeLinks.each((i, el) => {
+      if (i >= 2) return false;
+      const $el = $(el);
+      const title = $el.text().trim();
+      let link = $el.attr('href') || '';
+      link = normalizeUrl(link, '搜狗搜索');
+
+      if (title && link && link.startsWith('http')) {
+        results.push({
+          title: `${keyword} - 百科资料`,
+          url: link,
+          source: '百科',
+          summary: `官方网站/百科信息: ${title}`,
+          published_at: new Date().toISOString(),
+        });
+      }
+    });
+
+    console.log(`[Crawler] 百科搜索 "${keyword}" => ${results.length} 条`);
+  } catch (err) {
+    console.error(`[Crawler] 百科搜索 error:`, err.message);
+  }
+
+  return results;
+}
+
 module.exports = {
   crawlAllSources,
   searchWeb,
@@ -391,4 +692,6 @@ module.exports = {
   searchBilibili,
   searchHackerNews,
   searchGoogleNews,
+  searchBilibiliForPerson,
+  searchOrgInfo,
 };

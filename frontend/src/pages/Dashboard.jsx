@@ -41,7 +41,7 @@ export default function Dashboard({ notification, onDismissNotification }) {
 
   const loadData = useCallback(async () => {
     const [hotRes, kwRes] = await Promise.all([
-      get('/hotspots?limit=100'),
+      get('/hotspots?limit=9999'),
       get('/keywords'),
     ]);
     if (hotRes?.success) setHotspots(hotRes.data);

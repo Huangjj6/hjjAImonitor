@@ -127,4 +127,59 @@ ${items}
   }
 }
 
-module.exports = { verifyHotspot, rankAndDeduplicate };
+/**
+ * 智能分类关键词类型
+ * @param {string} keyword - 关键词
+ * @returns {'person'|'organization'|'topic'}
+ */
+async function classifyKeyword(keyword) {
+  if (!config.openrouter.apiKey) {
+    return 'topic';
+  }
+
+  const prompt = `请判断以下关键词的类型：
+"${keyword}"
+
+分类规则：
+- "person" - 人名、博主、UP主、网红、名人、个人IP（如：程序员鱼皮、李佳琦、Tim Cook）
+- "organization" - 公司、品牌、官方账号、开源项目、机构（如：OpenAI、Google、Vue.js、DeepSeek）
+- "topic" - 技术话题、概念、事件、普通关键词（如：AI绘画、Rust编程、比特币、年终总结）
+
+只返回一个单词：person、organization 或 topic`;
+
+  try {
+    const response = await axios.post(
+      `${config.openrouter.baseUrl}/chat/completions`,
+      {
+        model: config.openrouter.model,
+        messages: [
+          { role: 'system', content: '你是信息分类助手。只返回person/organization/topic，不要任何额外文字。' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.1,
+        max_tokens: 20,
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${config.openrouter.apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'http://localhost:5173',
+          'X-Title': 'Hot Monitor',
+        },
+        timeout: 10000,
+      }
+    );
+
+    const result = response.data.choices[0].message.content.trim().toLowerCase();
+    if (['person', 'organization'].includes(result)) {
+      console.log(`[AI] Keyword "${keyword}" classified as: ${result}`);
+      return result;
+    }
+    return 'topic';
+  } catch (err) {
+    console.error(`[AI] classifyKeyword error for "${keyword}":`, err.message);
+    return 'topic';
+  }
+}
+
+module.exports = { verifyHotspot, rankAndDeduplicate, classifyKeyword };

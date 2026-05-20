@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
 import { cn } from '../lib/utils';
+
 
 /* ───── 分类色系 ───── */
 const categoryColors = {
@@ -52,6 +53,8 @@ export default function ManagePage({
   onToggle,
   onDelete,
   loading,
+  scanning,
+  onScanningChange,
 }) {
   const { get, post, put } = useApi();
   const [settings, setSettings] = useState({});
@@ -59,12 +62,33 @@ export default function ManagePage({
 
   const [newKeyword, setNewKeyword] = useState('');
   const [inputFocused, setInputFocused] = useState(false);
+  const pollRef = useRef(null);
 
-  useEffect(() => { loadSettings(); }, []);
+  // 挂载时检查扫描状态
+  useEffect(() => {
+    loadSettings();
+    checkScanStatus();
+    return () => {
+      // 清理轮询
+      if (pollRef.current) {
+        pollRef.current.aborted = true;
+      }
+    };
+  }, []);
 
   const loadSettings = async () => {
     const res = await get('/settings');
     if (res.success) setSettings(res.data);
+  };
+
+  const checkScanStatus = async () => {
+    try {
+      const res = await get('/settings/scheduler-status');
+      if (res?.success && res.data.isScanning) {
+        onScanningChange?.(true);
+        pollScanStatus();
+      }
+    } catch (e) { /* ignore */ }
   };
 
   const handleSave = async (key, value) => {
@@ -75,9 +99,48 @@ export default function ManagePage({
   };
 
   const handleTriggerScan = async () => {
+    onScanningChange?.(true);
+    setSaveMsg('');
     const res = await post('/settings/trigger-scan');
-    setSaveMsg(res.message || '🚀 扫描已启动');
-    setTimeout(() => setSaveMsg(''), 3000);
+    if (res.success) {
+      setSaveMsg('🚀 扫描已启动');
+      pollScanStatus();
+    } else {
+      setSaveMsg(res.message || '扫描启动失败');
+      onScanningChange?.(false);
+    }
+  };
+
+  const pollScanStatus = async () => {
+    const ctx = {};
+    pollRef.current = ctx;
+    for (let i = 0; i < 60; i++) {
+      if (ctx.aborted) return;
+      await new Promise(r => setTimeout(r, 2000));
+      if (ctx.aborted) return;
+      try {
+        const res = await get('/settings/scheduler-status');
+        if (ctx.aborted) return;
+        if (res?.success && !res.data.isScanning) {
+          onScanningChange?.(false);
+          const last = res.data.lastScan;
+          if (last && last.total > 0) {
+            setSaveMsg(`✅ 扫描完成: ${last.new} 条真实, ${last.fake} 条过滤 (${last.duration}s)`);
+          } else if (last && last.total === 0) {
+            setSaveMsg('📭 未发现新热点，URL均已存在');
+          } else {
+            setSaveMsg('✅ 扫描完成');
+          }
+          setTimeout(() => setSaveMsg(''), 5000);
+          return;
+        }
+      } catch (e) { /* ignore poll errors */ }
+    }
+    if (!ctx.aborted) {
+      onScanningChange?.(false);
+      setSaveMsg('⚠️ 扫描超时，请稍后查看');
+      setTimeout(() => setSaveMsg(''), 3000);
+    }
   };
 
   const handleAddKeyword = async () => {
@@ -137,23 +200,39 @@ export default function ManagePage({
           <SectionTitle icon="⌨" label="关键词监控" accent="cyan" />
           <button
             onClick={handleTriggerScan}
-            className="relative group flex items-center gap-2 px-4 py-2 rounded-xl text-[12px] font-semibold transition-all duration-300 overflow-hidden border-0 cursor-pointer"
+            disabled={scanning}
+            className={cn(
+              'relative group flex items-center gap-2 px-4 py-2 rounded-xl text-[12px] font-semibold transition-all duration-300 overflow-hidden border-0 cursor-pointer',
+              scanning && 'opacity-60 cursor-not-allowed'
+            )}
             style={{
-              background: 'linear-gradient(135deg, rgba(99,102,241,0.30), rgba(139,92,246,0.20))',
-              boxShadow: '0 0 20px rgba(99,102,241,0.25), inset 0 1px 0 rgba(255,255,255,0.08)',
+              background: scanning
+                ? 'linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.10))'
+                : 'linear-gradient(135deg, rgba(99,102,241,0.30), rgba(139,92,246,0.20))',
+              boxShadow: scanning
+                ? '0 0 10px rgba(99,102,241,0.10)'
+                : '0 0 20px rgba(99,102,241,0.25), inset 0 1px 0 rgba(255,255,255,0.08)',
             }}
             onMouseEnter={e => {
+              if (scanning) return;
               e.currentTarget.style.boxShadow = '0 0 36px rgba(99,102,241,0.45), inset 0 1px 0 rgba(255,255,255,0.12)';
               e.currentTarget.style.transform = 'translateY(-1px)';
             }}
             onMouseLeave={e => {
+              if (scanning) return;
               e.currentTarget.style.boxShadow = '0 0 20px rgba(99,102,241,0.25), inset 0 1px 0 rgba(255,255,255,0.08)';
               e.currentTarget.style.transform = 'translateY(0)';
             }}
           >
-            <span className="relative z-10 text-base">⚡</span>
-            <span className="relative z-10 text-indigo-100">立即扫描</span>
-            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
+            <span className={cn('relative z-10 text-base', scanning && 'animate-spin')}>
+              {scanning ? '🔄' : '⚡'}
+            </span>
+            <span className="relative z-10 text-indigo-100">
+              {scanning ? '扫描中...' : '立即扫描'}
+            </span>
+            {!scanning && (
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
+            )}
           </button>
         </div>
         <p className="text-[11px] text-white/25 mb-4">添加你关心的关键词，AI 将自动扫描全平台热点</p>
@@ -229,14 +308,6 @@ export default function ManagePage({
                         kw.enabled ? 'text-white/80' : 'text-white/25 line-through'
                       )}>
                         {kw.keyword}
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className={cn(
-                          'inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium border',
-                          categoryColors[kw.category] || categoryColors['general']
-                        )}>
-                          {kw.category}
-                        </span>
                       </div>
                     </div>
                   </div>
