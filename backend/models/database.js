@@ -24,10 +24,39 @@ async function getDb() {
   return db;
 }
 
+let saveTimeout = null;
+let saveCounter = 0;
+
+/**
+ * 防抖保存：500ms 内多次写操作合并为一次全量写入
+ * 错误不抛出，防止 libuv O_HANDLE_CLOSING 崩溃进程
+ */
 function saveDb() {
-  if (db) {
+  if (!db) return;
+  saveCounter++;
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    try {
+      const data = db.export();
+      fs.writeFileSync(DB_PATH, Buffer.from(data));
+    } catch (err) {
+      // Windows 下并发文件句柄操作可能触发 libuv 断言，吞掉避免崩溃
+      console.error(`[DB] saveDb error (${saveCounter} calls merged):`, err.message);
+    }
+    saveTimeout = null;
+  }, 500);
+}
+
+/** 立即同步保存（启动初始化时用） */
+function saveDbSync() {
+  if (!db) return;
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = null;
+  try {
     const data = db.export();
     fs.writeFileSync(DB_PATH, Buffer.from(data));
+  } catch (err) {
+    console.error('[DB] saveDbSync error:', err.message);
   }
 }
 
@@ -86,7 +115,7 @@ function initTables() {
   insertSetting.run(['web_search_enabled', 'true']);
   insertSetting.free();
 
-  saveDb();
+  saveDbSync();
 }
 
 function queryAll(sql, params = []) {

@@ -33,4 +33,20 @@ module.exports = {
     requestDelay: 2000,        // 请求间延迟（ms）
     sources: ['web', 'twitter', 'bilibili', 'hackernews'], // 启用的信息源: web(DuckDuckGo+Bing+搜狗+Google), twitter, bilibili, hackernews
   },
+
+  // AI 相关性审核
+  relevance: {
+    minSaveScore: 0.4,         // 低于此分不入库
+    notifyScore: 0.6,          // 高于此分触发通知
+    titleKeywordBonus: 0.15,   // 关键词原词命中标题加分
+  },
+
+  // 来源可信度加权（Tier 1 最高）
+  sourceCredibility: {
+    official:  { tier: 1, weight: 1.00, label: '官方媒体', domains: ['gov.cn', 'xinhuanet.com', 'people.com.cn', 'cctv.com', 'bbc.com', 'reuters.com', 'ap.org', 'bloomberg.com'] },
+    media:     { tier: 2, weight: 0.95, label: '知名媒体', domains: ['36kr.com', 'ifeng.com', 'sina.com.cn', 'qq.com', 'sohu.com', 'thepaper.cn', 'ft.com', 'wsj.com', 'techcrunch.com', 'theverge.com', 'wired.com'] },
+    blog:      { tier: 3, weight: 0.90, label: '知名博客', domains: ['zhihu.com', 'juejin.cn', 'csdn.net', 'cnblogs.com', 'medium.com', 'weixin.qq.com', 'mp.weixin.qq.com', 'segmentfault.com', 'v2ex.com', 'github.com'] },
+    social:    { tier: 4, weight: 0.85, label: '社交媒体', domains: ['bilibili.com', 'weibo.com', 'twitter.com', 'x.com', 'douyin.com', 'reddit.com', 'tieba.baidu.com', 'xiaohongshu.com'] },
+    unknown:   { tier: 5, weight: 0.80, label: '未知来源' },
+  },
 };

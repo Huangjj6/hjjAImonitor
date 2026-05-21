@@ -127,7 +127,7 @@ export default function ManagePage({
           if (last && last.total > 0) {
             setSaveMsg(`✅ 扫描完成: ${last.new} 条真实, ${last.fake} 条过滤 (${last.duration}s)`);
           } else if (last && last.total === 0) {
-            setSaveMsg('📭 未发现新热点，URL均已存在');
+            setSaveMsg('📭 未发现新热点');
           } else {
             setSaveMsg('✅ 扫描完成');
           }

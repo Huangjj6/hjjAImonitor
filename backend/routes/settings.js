@@ -36,9 +36,11 @@ router.post('/trigger-scan', async (req, res) => {
   if (status.isScanning) {
     return res.json({ success: false, message: '扫描正在进行中，请稍后再试' });
   }
+  // 先异步启动扫描，确保 isScanning 在响应前已置位
+  const scanPromise = runScan();
   res.json({ success: true, message: '扫描已启动' });
-  // 异步执行，完成后更新状态
-  runScan().then(result => {
+  // 等待扫描完成，记录结果
+  scanPromise.then(result => {
     console.log(`[Manual Scan] 完成: ${JSON.stringify(result)}`);
   }).catch(err => console.error('[Manual Scan] Error:', err));
 });
