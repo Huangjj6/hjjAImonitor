@@ -1,6 +1,6 @@
 # Hot Monitor 需求文档
 
-> 版本：v1.1 | 日期：2026-05-18 | 作者：AI 编程工程师
+> 版本：v1.2 | 日期：2026-05-21 | 作者：AI 编程工程师
 
 ---
 
@@ -42,6 +42,8 @@
 - 手动触发扫描
 - 调度器状态查看
 - API Key 配置状态查看
+- 清空所有热点数据
+- 通知历史记录查看
 
 ---
 
@@ -59,16 +61,25 @@
 | 信息源 | 接入方式 | API Key | 说明 |
 |--------|----------|:-------:|------|
 | **DuckDuckGo** | HTML 爬虫（`html.duckduckgo.com`） | ❌ | 基础 Web 搜索，免费不被墙 |
-| **Bing News** | RSS（`bing.com/news/search?format=rss`） | ❌ | 备用新闻源 |
+| **Bing News** | HTML 爬虫（`bing.com/search`） | ❌ | 备用新闻源，RSS 已被屏蔽故改用 HTML 解析 |
 | **Google News** | RSS（`news.google.com/rss`） | ❌ | 全球新闻覆盖 |
 | **搜狗搜索** | HTML 爬虫（`sogou.com/web`） | ❌ | 中文搜索强项 |
 | **Twitter/X** | twitterapi.io API | ✅ 需要 | 实时推文搜索 |
-| **Bilibili** | 官方 API（`api.bilibili.com/x/web-interface/search/type`） | ❌ | 视频热点，中文社区 |
+| **Bilibili** | 官方 API（`api.bilibili.com/x/web-interface/search/type`） | ❌ | 视频热点，中文社区；API 失败自动降级为 HTML 爬虫 |
 | **HackerNews** | Algolia API（`hn.algolia.com/api/v1`） | ❌ | 全球科技热点 |
+| **Gitee** | 官方 API（`gitee.com/api/v5`） | ❌ | 开源中国代码仓库搜索 |
+| **Reddit** | JSON feed（`reddit.com/search.json`） | ❌ | 国际社区讨论 |
+| **开源中国** | HTML 爬虫（`oschina.net/search`） | ❌ | 中文开发者新闻 |
+| **GitHub** | 官方 API（`api.github.com/search/repositories`） | ❌ | 热门仓库趋势 |
+
+> **特殊源说明：**
+> - **Bilibili 人物搜索** — 当关键词类型为 `person` 时，额外搜索 UP 主空间及最新视频
+> - **组织/百科搜索** — 当关键词类型为 `organization` 时，额外搜索百科信息
+> - **GitHub Trending** — 不按关键词搜索，直接拉取当日热门仓库榜单
 
 > **配置方式：** 在 `config.js` 中通过 `crawler.sources` 数组控制启用的源：
 > ```js
-> sources: ['web', 'twitter', 'bilibili', 'hackernews']
+> sources: ['web', 'twitter', 'bilibili', 'hackernews', 'gitee', 'reddit', 'oschina', 'github']
 > // web = DuckDuckGo + Bing News + 搜狗 + Google News
 > ```
 > 要求：同时从多个信息源并行采集（`Promise.allSettled`），URL 自动去重，避免单一来源偏差。注意请求频率控制。
@@ -82,7 +93,16 @@
   - 判断内容是否与关键词真正相关
   - 识别虚假/标题党/蹭热度内容
   - 给每条内容打分（0~1）
+  - 提取内容实际主题（`contentSubject`）和匹配模式（`exact_match / partial_match / tangential / unrelated`）
+  - 情感分析（`sentiment`：positive / negative / neutral）
+  - 实体提取（`entities`：关联的关键实体列表）
+  - 置信度评估（`confidence`：AI 对判断的确信度）
+  - 来源可信度加权后得出最终综合评分
 - AI 模型可配置切换
+- **预过滤优化** — 关键词未出现在标题或摘要中时直接跳过 AI 调用，节省 API 消耗
+- **关键词分类** — 添加关键词时异步自动分类为 `person / organization / topic`，影响搜索策略
+- **搜索词扩展（Query Expansion）** — 自动生成中英文变体，提高搜索覆盖率
+- **来源可信度加权** — 根据来源域名系统（Tier 1~5）加权最终评分
 
 ---
 
@@ -116,7 +136,13 @@
 - 定时调度间隔可通过 API 动态配置（`PUT /api/settings`）
 - 爬虫请求间有延迟控制（默认 2s），避免被封
 - URL 去重，避免重复入库
+- **标题相似度去重** — 基于 3-gram Jaccard 相似度算法，相似度 >0.8 的标题归为同一组，每组仅保留来源可信度最高的结果进行 AI 验证
 - 系统状态可视化（`/api/config-status`、`/api/settings/scheduler-status`）
 - 健康检查接口（`/api/health`）
 - 各信息源独立容错，单个源失败不影响其他源
 - 演示数据生成功能（`/api/hotspots/generate-demo`），便于快速体验
+- **关键词并行扫描** — 最多并发 3 个关键词同时扫描
+- **扫描超时保护** — 单次扫描最长 5 分钟，超时自动重置状态
+- **AI 决策日志** — 每次 AI 判断记录到 `backend/tests/ai_decisions.jsonl`，用于后续评估优化
+- **搜索词扩展** — 支持英文关键词自动扩展，中文关键词生成中英文变体搜索
+- **来源可信度分级** — 分为官方媒体(T1)、知名媒体(T2)、知名博客(T3)、社交媒体(T4)、未知来源(T5)五级，影响最终评分权重

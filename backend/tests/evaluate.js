@@ -65,6 +65,15 @@ function showStats(filePath) {
     if (d.saved) bySource[s].saved++;
   });
 
+  // 按情感统计
+  const bySentiment = {};
+  decisions.filter(d => d.sentiment).forEach(d => {
+    const s = d.sentiment || 'unknown';
+    if (!bySentiment[s]) bySentiment[s] = { total: 0, saved: 0 };
+    bySentiment[s].total++;
+    if (d.saved) bySentiment[s].saved++;
+  });
+
   // 分数分布
   const buckets = { '0.0-0.2': 0, '0.2-0.4': 0, '0.4-0.6': 0, '0.6-0.8': 0, '0.8-1.0': 0 };
   decisions.forEach(d => {
@@ -89,6 +98,12 @@ function showStats(filePath) {
   console.log('\n  ── 按匹配模式 ──');
   for (const [mode, v] of Object.entries(byMode)) {
     console.log(`  ${mode.padEnd(16)} 总数:${String(v.total).padStart(4)}  保存:${String(v.saved).padStart(4)} (${fmtPct(v.saved, v.total)})`);
+  }
+  if (Object.keys(bySentiment).length > 0) {
+    console.log('\n  ── 按情感 ──');
+    for (const [s, v] of Object.entries(bySentiment)) {
+      console.log(`  ${s.padEnd(12)} 总数:${String(v.total).padStart(4)}  保存:${String(v.saved).padStart(4)} (${fmtPct(v.saved, v.total)})`);
+    }
   }
   console.log('\n  ── 按来源 ──');
   const topSources = Object.entries(bySource).sort((a, b) => b[1].total - a[1].total).slice(0, 8);
@@ -131,6 +146,8 @@ async function interactiveReview(limit = 50) {
     console.log(`  标题:   ${d.title}`);
     if (d.contentSubject) console.log(`  主题:   ${d.contentSubject}`);
     console.log(`  模式:   ${d.matchMode} | 可信度: ${d.credibilityTier}`);
+    if (d.confidence !== undefined) console.log(`  确信度: ${d.confidence} | 情感: ${d.sentiment || '?'}`);
+    if (d.entities?.length) console.log(`  实体:   ${d.entities.join(', ')}`);
 
     const ans = (await ask('  [y]相关 [n]无关 [f]虚假 [s]跳过 [q]退出: ')).toLowerCase();
 
@@ -189,6 +206,9 @@ function exportGoldenSet() {
     credibilityTier: d.credibilityTier,
     matchMode: d.matchMode,
     finalScore: d.finalScore || d.aiScore,
+    confidence: d.confidence,
+    sentiment: d.sentiment,
+    entities: d.entities,
     expectedRelevant: d.correct && !d.isFake,
     expectedFake: d.isFake || false,
     expectedScore: d.finalScore || d.aiScore, // 可后续手动调整

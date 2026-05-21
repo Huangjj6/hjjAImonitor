@@ -8,12 +8,12 @@ const config = require('../config');
  * @param {string} summary - 热点摘要
  * @param {string} source - 来源
  * @param {string} credibilityTier - 来源可信度标签（official/media/blog/social/unknown）
- * @returns {Object} { isRelevant, isFake, score, reason, contentSubject, matchMode }
+ * @returns {Object} { isRelevant, isFake, score, reason, contentSubject, matchMode, confidence, sentiment, entities }
  */
 async function verifyHotspot(keyword, title, summary, source, credibilityTier = 'unknown') {
   if (!config.openrouter.apiKey) {
     console.warn('[AI] OpenRouter API key not configured, skipping AI verification');
-    return { isRelevant: true, isFake: false, score: 0.5, reason: 'AI未配置，默认通过', contentSubject: '', matchMode: 'unknown' };
+    return { isRelevant: true, isFake: false, score: 0.5, reason: 'AI未配置，默认通过', contentSubject: '', matchMode: 'unknown', confidence: 0, sentiment: 'neutral', entities: [] };
   }
 
   // 预过滤：关键词完全不在标题也不在摘要中 → 快速跳过，节省AI调用
@@ -22,38 +22,36 @@ async function verifyHotspot(keyword, title, summary, source, credibilityTier = 
   const summaryLower = (summary || '').toLowerCase();
   if (!titleLower.includes(kwLower) && !summaryLower.includes(kwLower)) {
     console.log(`[AI] Pre-filter: keyword "${keyword}" not found in title/summary, skip AI call`);
-    return { isRelevant: false, isFake: false, score: 0.1, reason: '预过滤：关键词未出现在标题/摘要中', contentSubject: '', matchMode: 'unrelated' };
+    return { isRelevant: false, isFake: false, score: 0.1, reason: '预过滤：关键词未出现在标题/摘要中', contentSubject: '', matchMode: 'unrelated', confidence: 0.9, sentiment: 'neutral', entities: [] };
   }
 
   const credibility = config.sourceCredibility[credibilityTier] || config.sourceCredibility.unknown;
 
-  const prompt = `你是热点信息相关性审核专家。请判断一条信息与监控关键词的相关性。
+  const prompt = `你是热点信息相关性审核专家。判断一条信息与监控关键词的相关性。
 
 【监控关键词】"${keyword}"
-【来源】${source}（可信度: ${credibility.label}，Tier ${credibility.tier}/5）
+【来源】${source}（可信度: ${credibility.label}, Tier ${credibility.tier}/5）
 【标题】${title}
 【摘要】${summary || '无摘要'}
 
-### 评分标准（必须严格遵守）
-| 分数区间 | 含义 | 典型场景 |
-|----------|------|----------|
-| 0.0-0.3  | 无关 | 关键词仅在页面边栏/推荐位出现，或纯SEO蹭词 |
-| 0.3-0.5  | 弱相关 | 内容涉及相关领域但关键词非焦点，或仅一笔带过 |
-| 0.5-0.7  | 直接相关 | 关键词是内容的讨论对象之一，有实质性内容 |
-| 0.7-1.0  | 高度相关 | 关键词是唯一/核心主题，内容深入且来源权威 |
+评分标准（0-1）:
+0.0-0.3=无关（关键词仅边栏出现/SEO蹭词）
+0.3-0.5=弱相关（领域相关但非焦点）
+0.5-0.7=直接相关（关键词是讨论对象之一）
+0.7-1.0=高度相关（核心主题+来源权威）
 
-### 判断流程
-1. 先提取内容真实主题(contentSubject)：独立判断"这篇文章在讲什么"
-2. 对比监控关键词与 contentSubject 的交集程度
-3. 如果关键词只是碰巧出现但内容不围绕它 → isRelevant=false
-4. 如果是标题党/广告/纯蹭热度 → isFake=true
-5. 来源可信度 Tier 越高，相同内容应给更高分
+判断流程:
+1. 提取内容真实主题(contentSubject)
+2. 对比关键词与主题的交集程度
+3. 标题党/广告/蹭热度 → isFake=true
+4. 评估AI自身确信度(confidence)
+5. 判断对关键词的情感倾向(sentiment)
+6. 提取其他相关实体(entities)
 
-### 示例
-- 关键词"OpenAI"，标题"OpenAI CEO当选年度人物" → exact_match, score 0.85
-- 关键词"React"，标题"前端2025趋势：React vs Vue" → partial_match, score 0.6
-- 关键词"比特币"，标题"区块链技术在教育领域的应用"（仅末段提了比特币）→ tangential, score 0.25
-- 关键词"Vue.js"，标题"用AI写网页！5个神级提示词"（内容是AI工具）→ unrelated, isFake=true
+示例:
+- "OpenAI CEO当选年度人物" → exact_match, 0.85
+- "前端2025趋势: React vs Vue" → partial_match, 0.6
+- "区块链在教育领域的应用"（末段提比特币）→ tangential, 0.25
 
 返回JSON（不要markdown包裹）:
 {
@@ -62,7 +60,10 @@ async function verifyHotspot(keyword, title, summary, source, credibilityTier = 
   "isRelevant": true/false,
   "isFake": true/false,
   "score": 0.0-1.0,
-  "reason": "判断理由(50字内，说明为什么是这个分数)"
+  "confidence": 0.0-1.0,
+  "sentiment": "positive|negative|neutral",
+  "entities": ["实体1", "实体2"],
+  "reason": "判断理由(60字内)"
 }`;
 
   try {
@@ -100,15 +101,18 @@ async function verifyHotspot(keyword, title, summary, source, credibilityTier = 
     result.contentSubject = result.contentSubject || '';
     result.matchMode = result.matchMode || 'unknown';
     result.reason = result.reason || '';
+    result.confidence = Math.max(0, Math.min(1, parseFloat(result.confidence) || 0));
+    result.sentiment = ['positive', 'negative', 'neutral'].includes(result.sentiment) ? result.sentiment : 'neutral';
+    result.entities = Array.isArray(result.entities) ? result.entities.slice(0, 5) : [];
 
-    console.log(`[AI] "${title.substring(0, 40)}" => ${result.matchMode} | score:${result.score} | subject:"${result.contentSubject}"`);
+    console.log(`[AI] "${title.substring(0, 40)}" => ${result.matchMode} | s:${result.score} | c:${result.confidence} | ${result.sentiment} | subj:"${result.contentSubject}"`);
     return result;
   } catch (err) {
     const detail = err.response?.status
       ? `HTTP ${err.response.status}: ${JSON.stringify(err.response.data).substring(0, 200)}`
       : err.message;
     console.error(`[AI] Verification error:`, detail);
-    return { isRelevant: true, isFake: false, score: 0.5, reason: 'AI验证异常，默认通过', contentSubject: '', matchMode: 'error' };
+    return { isRelevant: true, isFake: false, score: 0.5, reason: 'AI验证异常，默认通过', contentSubject: '', matchMode: 'error', confidence: 0, sentiment: 'neutral', entities: [] };
   }
 }
 
