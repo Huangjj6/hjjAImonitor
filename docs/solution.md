@@ -245,8 +245,17 @@ Base URL: `http://localhost:3001/api`
 - 来源可信度：T1=1.0, T2=0.95, T3=0.90, T4=0.85, T5=0.80
 - 时间新颖度：14 天半衰期，最低 0.7 倍
 
-**预过滤优化：**
-关键词未出现在标题或摘要中时，直接返回 score=0.1、confidence=0.9，跳过 AI 调用（节省 API 费用）
+**多层预过滤优化（P0）：**
+4 层递进匹配，提高命中率同时避免无效 AI 调用：
+
+| 层级 | 名称 | 说明 | 样例 |
+|------|------|------|------|
+| L1 | 精确子串 | 原始关键词直接匹配 | "GPT-5" → 标题含"GPT-5" |
+| L2 | 分词匹配 | 按标点空格分词后匹配 | "GPT-5" → 标题含"GPT"和"5" |
+| L3 | 规范化匹配 | 去掉标点空格后匹配 | "GPT-5" → 标题含"GPT5" |
+| L4 | 同义映射 | 同义词/缩写/变体表匹配 | "AI" → 标题含"人工智能" |
+
+全部未命中则返回 score=0.05、confidence=0.95，完全跳过 AI 调用。
 
 **其他 AI 功能：**
 - **关键词分类（classifyKeyword）** — 判断关键词类型：`person / organization / topic`
@@ -381,6 +390,9 @@ sourceMaxResults: {
 | 最大保留时间 | `config.crawler.maxAgeHours` | 0（不限） |
 | 入库最低分 | `config.relevance.minSaveScore` | 0.4 |
 | 通知触发分 | `config.relevance.notifyScore` | 0.6 |
+| 预过滤开关 | `config.preFilter.enabled` | `true` |
+| 预过滤未命中分 | `config.preFilter.scoreOnMiss` | 0.05 |
+| 预过滤未命中确信度 | `config.preFilter.confidenceOnMiss` | 0.95 |
 | 标题命中加分 | `config.relevance.titleKeywordBonus` | 0.15 |
 | 搜索词扩展 | `config.queryExpansion.enabled` | `true` |
 | 每源最多扩展词 | `config.queryExpansion.maxExpansionsPerSource` | 2 |

@@ -45,6 +45,13 @@ module.exports = {
     titleKeywordBonus: 0.15,   // 关键词原词命中标题加分
   },
 
+  // Pre-filter：AI 调用前置过滤
+  preFilter: {
+    enabled: true,             // 是否启用多层预过滤
+    scoreOnMiss: 0.05,         // 预过滤未命中时的默认分
+    confidenceOnMiss: 0.95,    // 预过滤未命中时的确信度
+  },
+
   // Query Expansion：搜索词扩展
   queryExpansion: {
     enabled: true,             // 是否启用搜索词扩展

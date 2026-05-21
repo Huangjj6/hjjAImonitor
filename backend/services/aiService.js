@@ -1,6 +1,127 @@
 const axios = require('axios');
 const config = require('../config');
 
+// ─── 同义/缩写映射表 ───
+const SYNONYM_MAP = {
+  // AI / 大模型
+  'ai': ['人工智能', 'artificial intelligence', 'a.i'],
+  '人工智能': ['ai', 'artificial intelligence'],
+  '大模型': ['llm', 'large language model', '大语言模型', 'foundation model', '基础模型'],
+  '大语言模型': ['大模型', 'llm', 'large language model'],
+  'llm': ['大模型', '大语言模型', 'large language model'],
+  'gpt': ['chatgpt', 'gpt-4', 'gpt4', 'gpt35', 'gpt-3.5'],
+  'chatgpt': ['gpt', 'gpt-4', 'openai'],
+  'openai': ['chatgpt', 'gpt', 'sam altman', 'sora'],
+  'gpt-5': ['gpt5', 'gpt 5', 'chatgpt 5'],
+  'gpt5': ['gpt-5', 'gpt 5'],
+  'deepseek': ['深度求索', 'deep seek'],
+  '深度求索': ['deepseek', 'deep seek'],
+
+  // 编程语言 / 框架
+  'js': ['javascript', 'node.js', 'nodejs', 'node', 'ecmascript'],
+  'javascript': ['js', 'ecmascript', 'es6', 'es8', 'es2024'],
+  'ts': ['typescript'],
+  'typescript': ['ts'],
+  'react': ['reactjs', 'react.js', 'react 19', 'nextjs', 'next.js'],
+  'vue': ['vuejs', 'vue.js', 'vue 3', 'nuxt', 'nuxtjs'],
+  'node': ['nodejs', 'node.js', 'javascript runtime', 'express'],
+  'nodejs': ['node', 'node.js'],
+  'python': ['py', 'python3', 'django', 'flask', 'pytorch'],
+
+  // 技术名词
+  'docker': ['container', '容器', 'docker compose', 'dockerfile'],
+  'kubernetes': ['k8s', 'kube', '容器编排'],
+  'k8s': ['kubernetes', 'kube'],
+  'rust': ['rustlang', 'rust-lang', 'rustc'],
+  '区块链': ['blockchain', 'web3', 'web3.0', 'crypto', '加密货币', 'nft'],
+  'blockchain': ['区块链', 'web3', '分布式账本'],
+
+  // 公司 / 品牌
+  'google': ['谷歌', 'alphabet', 'gemini', 'gmail', 'pixel'],
+  '苹果': ['apple', 'iphone', 'ios', 'mac', 'macos', 'tim cook'],
+  'apple': ['苹果', 'iphone', 'mac', 'ios', 'macos', 'tim cook'],
+  'microsoft': ['微软', 'windows', 'azure', 'copilot', 'msft', 'satya'],
+  '微软': ['microsoft', 'windows', 'azure', 'copilot', 'satya nadella'],
+  'meta': ['facebook', 'instagram', 'whatsapp', 'llama', '扎克伯格'],
+  'tesla': ['特斯拉', '马斯克', 'elon musk', 'cybertruck', 'model y'],
+  '特斯拉': ['tesla', '马斯克', 'elon musk'],
+
+  // 通用技术
+  'api': ['api接口', 'rest api', 'restful', 'web api', 'application programming interface', 'open api'],
+  'sdk': ['软件开发包', 'software development kit', '开发工具包'],
+  'ui': ['用户界面', 'user interface', 'ux', '界面设计'],
+};
+
+/**
+ * 获取关键词的所有同义/缩写/变体
+ * @param {string} keyword
+ * @returns {string[]}
+ */
+function getKeywordSynonyms(keyword) {
+  const kw = keyword.toLowerCase().trim();
+  const results = [];
+
+  // 正向查表
+  if (SYNONYM_MAP[kw]) {
+    results.push(...SYNONYM_MAP[kw]);
+  }
+
+  // 反向查表：找那些把 kw 列为同义词的 key
+  for (const [key, values] of Object.entries(SYNONYM_MAP)) {
+    if (key !== kw && values.some(v => v.toLowerCase() === kw)) {
+      results.push(key);
+    }
+  }
+
+  return [...new Set(results.map(s => s.toLowerCase()))];
+}
+
+/**
+ * 多层预过滤：判断关键词是否可能出现在标题/摘要中
+ * @returns {Object} { matched: boolean, matchLayer: string }
+ */
+function preFilterKeyword(keyword, title, summary) {
+  const kw = (keyword || '').toLowerCase().trim();
+  const ti = (title || '').toLowerCase();
+  const su = (summary || '').toLowerCase();
+  if (!kw) return { matched: false, matchLayer: 'empty' };
+
+  // Layer 1: 精确子串匹配（最快路径）
+  if (ti.includes(kw) || su.includes(kw)) {
+    return { matched: true, matchLayer: 'exact' };
+  }
+
+  // Layer 2: 分词级匹配 — 按标点和空格分词后检查
+  const tokens = kw.split(/[\s\-_.:/·・]+/).filter(t => t.length >= 2);
+  if (tokens.length > 1) {
+    const anyMatched = tokens.some(t => ti.includes(t) || su.includes(t));
+    if (anyMatched) {
+      return { matched: true, matchLayer: 'token' };
+    }
+  }
+
+  // Layer 3: 标准化匹配 — 去掉标点和空格后比较
+  const normalize = s => s.replace(/[\s\-_.:·・、，。！？（）()\[\]【】「」{}'"：；]/g, '');
+  const kwNorm = normalize(kw);
+  if (kwNorm.length > 1) {
+    const tiNorm = normalize(ti);
+    const suNorm = normalize(su);
+    if (tiNorm.includes(kwNorm) || suNorm.includes(kwNorm)) {
+      return { matched: true, matchLayer: 'normalized' };
+    }
+  }
+
+  // Layer 4: 同义/缩写映射匹配
+  const synonyms = getKeywordSynonyms(kw);
+  for (const syn of synonyms) {
+    if (syn.length >= 2 && (ti.includes(syn) || su.includes(syn))) {
+      return { matched: true, matchLayer: 'synonym' };
+    }
+  }
+
+  return { matched: false, matchLayer: 'all_missed' };
+}
+
 /**
  * 使用 AI 验证热点内容是否与关键词真正相关
  * @param {string} keyword - 监控的关键词
@@ -16,13 +137,23 @@ async function verifyHotspot(keyword, title, summary, source, credibilityTier = 
     return { isRelevant: true, isFake: false, score: 0.5, reason: 'AI未配置，默认通过', contentSubject: '', matchMode: 'unknown', confidence: 0, sentiment: 'neutral', entities: [] };
   }
 
-  // 预过滤：关键词完全不在标题也不在摘要中 → 快速跳过，节省AI调用
-  const kwLower = keyword.toLowerCase();
-  const titleLower = (title || '').toLowerCase();
-  const summaryLower = (summary || '').toLowerCase();
-  if (!titleLower.includes(kwLower) && !summaryLower.includes(kwLower)) {
-    console.log(`[AI] Pre-filter: keyword "${keyword}" not found in title/summary, skip AI call`);
-    return { isRelevant: false, isFake: false, score: 0.1, reason: '预过滤：关键词未出现在标题/摘要中', contentSubject: '', matchMode: 'unrelated', confidence: 0.9, sentiment: 'neutral', entities: [] };
+  // 多层预过滤：判断关键词是否可能出现在内容中，避免无效 AI 调用
+  if (config.preFilter.enabled) {
+    const pf = preFilterKeyword(keyword, title, summary);
+    if (!pf.matched) {
+      console.log(`[AI] Pre-filter(Layer:${pf.matchLayer}): keyword "${keyword}" not found, skip AI call`);
+      return {
+        isRelevant: false, isFake: false,
+        score: config.preFilter.scoreOnMiss,
+        reason: `预过滤(${pf.matchLayer})：关键词未出现在标题/摘要中`,
+        contentSubject: '', matchMode: 'unrelated',
+        confidence: config.preFilter.confidenceOnMiss,
+        sentiment: 'neutral', entities: [],
+      };
+    }
+    if (pf.matchLayer !== 'exact') {
+      console.log(`[AI] Pre-filter(Layer:${pf.matchLayer}): "${keyword}" fuzzy matched, proceeding to AI`);
+    }
   }
 
   const credibility = config.sourceCredibility[credibilityTier] || config.sourceCredibility.unknown;
