@@ -396,3 +396,5 @@ sourceMaxResults: {
 | 标题命中加分 | `config.relevance.titleKeywordBonus` | 0.15 |
 | 搜索词扩展 | `config.queryExpansion.enabled` | `true` |
 | 每源最多扩展词 | `config.queryExpansion.maxExpansionsPerSource` | 2 |
+| 百科域名过滤 | `config.crawler.excludeDomains` | `[baike.baidu.com, wikipedia.org, ...]` |
+| 百科标题过滤 | `config.crawler.excludeTitlePatterns` | `[百科, baike, 简介, 维基百科, ...]` |

@@ -36,6 +36,23 @@ module.exports = {
     sourceMaxResults: {         // 按源限制最终入库上限（覆盖 maxResultsPerSource）
       '搜狗搜索': 3,            // 搜狗无发布时间，降低权重避免旧文章占太多
     },
+    excludeDomains: [            // 百科类域名，URL 匹配即过滤
+      'baike.baidu.com',
+      'baike.sogou.com',
+      'baike.so.com',
+      'wikipedia.org',
+      'zh.wikipedia.org',
+      'en.wikipedia.org',
+      'wiki.mbalib.com',
+    ],
+    excludeTitlePatterns: [      // 标题含这些关键词也过滤
+      '百科',
+      'baike',
+      '简介',
+      '个人资料',
+      '维基百科',
+      '互动百科',
+    ],
   },
 
   // AI 相关性审核

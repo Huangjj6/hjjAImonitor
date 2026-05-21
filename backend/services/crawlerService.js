@@ -508,23 +508,30 @@ async function crawlAllSources(keyword, category = 'general', keywordType = 'top
     tasks.push(searchGitHubTrending());
   }
 
-  if (keywordType === 'organization') {
-    for (const q of webQueries) tasks.push(searchOrgInfo(q));
-  }
+  // organization 类型不再调用百科搜索，聚焦事件热点
 
   const settled = await Promise.allSettled(tasks);
   for (const r of settled) {
     if (r.status === 'fulfilled') allResults.push(...r.value);
   }
 
-  // URL 去重 + 来源自动修正
+  // URL 去重 + 来源自动修正 + 百科内容过滤
   const seen = new Set();
+  let excludedCount = 0;
   const unique = allResults.filter(item => {
     if (!item.url || seen.has(item.url)) return false;
     seen.add(item.url);
+    // 过滤百科类内容（如百度百科、维基百科等静态条目，非事件热点）
+    if (isEncyclopediaContent(item)) {
+      excludedCount++;
+      return false;
+    }
     item.source = detectSourceByUrl(item.url, item.source);
     return true;
   });
+  if (excludedCount > 0) {
+    console.log(`[Crawler] 百科过滤: 排除 ${excludedCount} 条百科类内容`);
+  }
 
   // 按源设置上限：控制不可信时间源的占比
   const sourceLimits = config.crawler.sourceMaxResults || {};
@@ -563,6 +570,34 @@ function detectSourceByUrl(url, defaultSource) {
     if (host.includes('sogou.com')) return '搜狗搜索';
   } catch {}
   return defaultSource;
+}
+
+/**
+ * 判断是否为百科类内容（根据域名和标题过滤）
+ */
+function isEncyclopediaContent(item) {
+  const domains = config.crawler.excludeDomains || [];
+  const titlePatterns = config.crawler.excludeTitlePatterns || [];
+
+  // URL 域名匹配
+  if (item.url) {
+    try {
+      const host = new URL(item.url).hostname;
+      if (domains.some(d => host === d || host.endsWith('.' + d))) {
+        return true;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 标题关键词匹配
+  if (item.title) {
+    const lowerTitle = item.title.toLowerCase();
+    if (titlePatterns.some(p => lowerTitle.includes(p.toLowerCase()))) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function cleanHtml(html) {
