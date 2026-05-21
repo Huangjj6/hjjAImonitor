@@ -1,44 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import HotspotTimeline from '../components/HotspotTimeline';
-import { StatCard } from '../components/ui/glowing-effect';
 import { useApi } from '../hooks/useApi';
 import { cn } from '../lib/utils';
 
-function timeAgo(dateStr) {
-  if (!dateStr) return '--';
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return '刚刚';
-  if (mins < 60) return `${mins}分钟前`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}小时前`;
-  return `${Math.floor(hours / 24)}天前`;
-}
-
-function AnimatedNumber({ value }) {
-  const [display, setDisplay] = useState(0);
-  useEffect(() => {
-    if (value === display) return;
-    const step = Math.max(1, Math.ceil(Math.abs(value - display) / 10));
-    const timer = setInterval(() => {
-      setDisplay(prev => {
-        if (Math.abs(value - prev) <= step) return value;
-        return prev + (value > prev ? step : -step);
-      });
-    }, 40);
-    return () => clearInterval(timer);
-  }, [value]);
-  return <>{display}</>;
-}
-
 export default function Dashboard({ notification, onDismissNotification }) {
-  const { get, post } = useApi();
+  const { get, post, del } = useApi();
   const [hotspots, setHotspots] = useState([]);
   const [keywords, setKeywords] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [lastScan, setLastScan] = useState(null);
-  const [pulseKey, setPulseKey] = useState(0);
   const [scanning, setScanning] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const loadData = useCallback(async () => {
     const [hotRes, kwRes] = await Promise.all([
@@ -47,9 +18,7 @@ export default function Dashboard({ notification, onDismissNotification }) {
     ]);
     if (hotRes?.success) setHotspots(hotRes.data);
     if (kwRes?.success) setKeywords(kwRes.data);
-    setLastScan(new Date().toISOString());
     setLoading(false);
-    setPulseKey(k => k + 1);
   }, [get]);
 
   useEffect(() => {
@@ -85,84 +54,60 @@ export default function Dashboard({ notification, onDismissNotification }) {
     ? Math.round(verified.reduce((s, h) => s + (h.ai_score || 0), 0) / verified.length * 100)
     : 0;
   const enabledKw = keywords.filter(k => k.enabled).length;
-
-  // 来源分布
-  const sourceDist = hotspots.reduce((acc, h) => {
-    acc[h.source] = (acc[h.source] || 0) + 1;
-    return acc;
-  }, {});
-  const topSource = Object.entries(sourceDist).sort((a, b) => b[1] - a[1])[0];
-
-  const stats = [
-    { label: '已发现', value: hotspots.length, sub: `最近 ${timeAgo(lastScan)} 刷新`, icon: '📡', accent: 'cyan', scanning: false },
-    { label: '已确认', value: verified.length, sub: avgScore > 0 ? `平均相关度 ${avgScore}%` : '等待 AI 验证', icon: '✅', accent: 'emerald' },
-    { label: '已过滤', value: fakes.length, sub: fakes.length > 0 ? 'AI 自动识别虚假内容' : '暂无虚假内容', icon: '🛡️', accent: 'rose' },
-    { label: '监控词', value: enabledKw, sub: `${keywords.length} 个关键词，${enabledKw} 个启用`, icon: '🎯', accent: 'amber' },
-  ];
+  const topSource = Object.entries(
+    hotspots.reduce((acc, h) => { acc[h.source] = (acc[h.source] || 0) + 1; return acc; }, {})
+  ).sort((a, b) => b[1] - a[1])[0];
 
   const latestHotspot = hotspots.length > 0 ? hotspots[0] : null;
 
   return (
-    <div className="h-full flex flex-col space-y-3 animate-fade-in overflow-hidden">
-      {/* Stats Grid */}
-      <div className="flex-shrink-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {stats.map((s) => (
-          <StatCard
-            key={s.label}
-            icon={s.icon}
-            label={s.label}
-            value={<AnimatedNumber value={s.value} />}
-            sub={s.sub}
-            accent={s.accent}
-          >
-            {s.label === '已发现' && (
-              <span className={cn(
-                'ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full transition-colors',
-                scanning
-                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                  : 'bg-white/[0.02] text-white/20 border border-white/[0.04]'
-              )}>
-                <span className={cn('w-1 h-1 rounded-full', scanning ? 'bg-cyan-400 animate-pulse' : 'bg-white/20')} />
-                {scanning ? '扫描中' : '待机'}
-              </span>
-            )}
-          </StatCard>
-        ))}
+    <div className="h-full flex flex-col space-y-2 animate-fade-in overflow-hidden">
+      {/* Stats Bar — 紧凑横条 */}
+      <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] text-[11px]">
+        <span className="text-white/40 font-medium">📡 {hotspots.length}<span className="text-white/15 ml-1">已发现</span></span>
+        <span className="w-px h-3 bg-white/[0.08]" />
+        <span className="text-white/40 font-medium">✅ {verified.length}<span className="text-white/15 ml-1">已确认</span></span>
+        <span className="w-px h-3 bg-white/[0.08]" />
+        <span className="text-white/40 font-medium">🛡️ {fakes.length}<span className="text-white/15 ml-1">过滤</span></span>
+        <span className="w-px h-3 bg-white/[0.08]" />
+        <span className="text-white/40 font-medium">🎯 {enabledKw}<span className="text-white/15 ml-1">监控词</span></span>
+        {avgScore > 0 && (
+          <>
+            <span className="w-px h-3 bg-white/[0.08]" />
+            <span className="text-white/40 font-medium">📊 {avgScore}%<span className="text-white/15 ml-1">相关度</span></span>
+          </>
+        )}
+        <span className="flex-1" />
+        <span className={cn(
+          'inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full',
+          scanning ? 'bg-cyan-500/10 text-cyan-400' : 'bg-white/[0.02] text-white/20'
+        )}>
+          <span className={cn('w-1 h-1 rounded-full', scanning ? 'bg-cyan-400 animate-pulse' : 'bg-white/20')} />
+          {scanning ? '扫描中' : '待机'}
+        </span>
       </div>
 
       {/* Timeline - fills remaining space */}
-      <div className="flex-1 min-h-0 flex flex-col rounded-2xl border border-white/[0.10] bg-white/[0.04] hover:border-indigo-500/10 transition-all duration-500 shadow-[0_4px_16px_rgba(0,0,0,0.22)] p-5 sm:p-6">
-        <div className="flex-shrink-0 flex items-center justify-between mb-1 flex-wrap gap-2">
+      <div className="flex-1 min-h-0 flex flex-col rounded-2xl border border-white/[0.10] bg-white/[0.04] hover:border-indigo-500/10 transition-all duration-500 shadow-[0_4px_16px_rgba(0,0,0,0.22)] p-3">
+        <div className="flex-shrink-0 flex items-center justify-between mb-1 flex-wrap gap-1">
           <div className="flex-1 min-w-0">
-            <h2 className="text-sm font-semibold text-white/70 flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+            <h2 className="text-[12px] font-semibold text-white/60 flex items-center gap-1.5">
+              <span className="w-1 h-1 rounded-full bg-indigo-400" />
               热点时间线
+              {topSource && <span className="text-[10px] text-white/20 font-normal">· {topSource[0]} {topSource[1]}条</span>}
+              {latestHotspot && <span className="text-[10px] text-white/15 font-normal truncate max-w-[180px]">· {latestHotspot.title}</span>}
             </h2>
-            <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <p className="text-[11px] text-white/20">
-                {topSource
-                  ? `主要来源: ${topSource[0]} (${topSource[1]}条)`
-                  : '等待数据...'}
-              </p>
-              {latestHotspot && (
-                <>
-                  <span className="text-[10px] text-white/10">|</span>
-                  <span className="text-[10px] text-emerald-400/60 font-medium flex items-center gap-1">
-                    <span className="text-[11px]">🔥</span>
-                    最新: 
-                    <span className="text-white/40 truncate max-w-[200px] inline-block align-bottom">
-                      {latestHotspot.title}
-                    </span>
-                  </span>
-                  <span className="text-[10px] text-white/15 font-mono">
-                    {timeAgo(latestHotspot.discovered_at)}
-                  </span>
-                </>
-              )}
-            </div>
           </div>
+          {hotspots.length > 0 && (
+            <button
+              onClick={() => setShowClearConfirm(true)}
+              className="text-[10px] text-white/15 hover:text-rose-400 transition-colors px-2 py-0.5 rounded hover:bg-rose-500/5"
+            >
+              🗑 清空
+            </button>
+          )}
         </div>
-        <div className="flex-1 min-h-0 mt-3">
+        <div className="flex-1 min-h-0 mt-1">
           <HotspotTimeline
             hotspots={hotspots}
             loading={loading}
@@ -170,6 +115,39 @@ export default function Dashboard({ notification, onDismissNotification }) {
           />
         </div>
       </div>
+
+      {/* 清空确认弹窗 */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="rounded-2xl border border-rose-500/20 bg-[#0d0d1a] p-5 max-w-xs w-full mx-4 shadow-[0_16px_48px_rgba(0,0,0,0.5)] animate-slide-up">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-9 h-9 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-lg">⚠️</div>
+              <div>
+                <h3 className="text-sm font-semibold text-white/85">清空所有热点</h3>
+                <p className="text-[10px] text-white/30 mt-0.5">此操作将删除 {hotspots.length} 条热点，不可撤销</p>
+              </div>
+            </div>
+            <div className="flex gap-2.5">
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="flex-1 px-3 py-2 rounded-xl text-[12px] font-medium border border-white/[0.08] text-white/50 hover:text-white/70 hover:bg-white/[0.04] transition-all duration-200"
+              >
+                取消
+              </button>
+              <button
+                onClick={async () => {
+                  setShowClearConfirm(false);
+                  await del('/hotspots');
+                  loadData();
+                }}
+                className="flex-1 px-3 py-2 rounded-xl text-[12px] font-medium bg-rose-500/15 border border-rose-500/20 text-rose-400 hover:bg-rose-500/20 transition-all duration-200"
+              >
+                确认清空
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

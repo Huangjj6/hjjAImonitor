@@ -103,10 +103,8 @@ export default function ManagePage({
     setSaveMsg('');
     const res = await post('/settings/trigger-scan');
     if (res.success) {
-      setSaveMsg('🚀 扫描已启动');
       pollScanStatus();
     } else {
-      setSaveMsg(res.message || '扫描启动失败');
       onScanningChange?.(false);
     }
   };
@@ -115,7 +113,6 @@ export default function ManagePage({
     const ctx = {};
     pollRef.current = ctx;
     for (let i = 0; i < 60; i++) {
-      if (ctx.aborted) return;
       await new Promise(r => setTimeout(r, 2000));
       if (ctx.aborted) return;
       try {
@@ -123,24 +120,11 @@ export default function ManagePage({
         if (ctx.aborted) return;
         if (res?.success && !res.data.isScanning) {
           onScanningChange?.(false);
-          const last = res.data.lastScan;
-          if (last && last.total > 0) {
-            setSaveMsg(`✅ 扫描完成: ${last.new} 条真实, ${last.fake} 条过滤 (${last.duration}s)`);
-          } else if (last && last.total === 0) {
-            setSaveMsg('📭 未发现新热点');
-          } else {
-            setSaveMsg('✅ 扫描完成');
-          }
-          setTimeout(() => setSaveMsg(''), 5000);
           return;
         }
-      } catch (e) { /* ignore poll errors */ }
+      } catch (e) { /* ignore */ }
     }
-    if (!ctx.aborted) {
-      onScanningChange?.(false);
-      setSaveMsg('⚠️ 扫描超时，请稍后查看');
-      setTimeout(() => setSaveMsg(''), 3000);
-    }
+    onScanningChange?.(false);
   };
 
   const handleAddKeyword = async () => {

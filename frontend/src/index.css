@@ -233,6 +233,12 @@ select.input-neon {
   to { opacity: 0; transform: translateX(100%) scale(0.95); }
 }
 
+/* ===== Toast 淡出上移 ===== */
+@keyframes fadeOutUp {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-20px); }
+}
+
 /* ===== 骨架屏 ===== */
 .skeleton {
   background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.14) 50%, rgba(255,255,255,0.05) 75%);

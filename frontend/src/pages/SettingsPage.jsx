@@ -10,16 +10,25 @@ export default function SettingsPage() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const scanTimer = useRef(null);
+  const pollCount = useRef(0);
+  const MAX_POLLS = 150; // 150 polls × 2s = 5 分钟上限
 
   // 轮询扫描状态，扫描完成后自动恢复按钮
   const pollScanStatus = useCallback(async () => {
-    const res = await get('/settings/scheduler-status');
-    if (res?.success && !res.data.isScanning) {
+    pollCount.current += 1;
+    if (pollCount.current > MAX_POLLS) {
       setIsScanning(false);
       if (scanTimer.current) { clearInterval(scanTimer.current); scanTimer.current = null; }
-      setSaveMsg(`✅ 扫描完成 (${res.data.lastScan?.new || 0} 条新增)`);
-      setTimeout(() => setSaveMsg(''), 3000);
+      return;
     }
+    try {
+      const res = await get('/settings/scheduler-status');
+      if (res?.success && !res.data.isScanning) {
+        setIsScanning(false);
+        if (scanTimer.current) { clearInterval(scanTimer.current); scanTimer.current = null; }
+        // 不设置 toast，让 "扫描已启动..." 的 3 秒 timeout 自然消失
+      }
+    } catch { /* ignore */ }
   }, [get]);
 
   useEffect(() => {
@@ -44,7 +53,7 @@ export default function SettingsPage() {
   const handleSave = async (key, value) => {
     await put('/settings', { [key]: value });
     setSaveMsg('✅ 已保存');
-    setTimeout(() => setSaveMsg(''), 2000);
+    setTimeout(() => setSaveMsg(''), 3000);
     loadSettings();
   };
 
@@ -56,10 +65,7 @@ export default function SettingsPage() {
       return;
     }
     setIsScanning(true);
-    setSaveMsg('扫描已启动...');
-    // 3 秒后 toast 自动消失，之后由轮询覆盖为完成消息
-    setTimeout(() => { if (scanTimer.current) setSaveMsg(''); }, 3000);
-    // 每 2 秒轮询，直到扫描完成
+    pollCount.current = 0;
     scanTimer.current = setInterval(pollScanStatus, 2000);
   };
 
@@ -112,7 +118,13 @@ export default function SettingsPage() {
     <div className="space-y-6 animate-fade-in">
       {/* Save toast */}
       {saveMsg && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-medium animate-slide-up shadow-[0_4px_24px_rgba(0,0,0,0.3)]">
+        <div
+          key={saveMsg}
+          className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-medium shadow-[0_4px_24px_rgba(0,0,0,0.3)]"
+          style={{
+            animation: 'slide-up 0.4s ease-out, fadeOutUp 0.35s ease-in 2.6s forwards'
+          }}
+        >
           {saveMsg}
         </div>
       )}

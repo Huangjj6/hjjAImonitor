@@ -42,7 +42,7 @@ router.post('/trigger-scan', async (req, res) => {
   }
   // 先异步启动扫描，确保 isScanning 在响应前已置位
   const scanPromise = runScan();
-  res.json({ success: true, message: '扫描已启动' });
+  res.json({ success: true });
   // 等待扫描完成，记录结果
   scanPromise.then(result => {
     console.log(`[Manual Scan] 完成: ${JSON.stringify(result)}`);

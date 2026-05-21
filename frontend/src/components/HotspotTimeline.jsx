@@ -72,22 +72,16 @@ function HotspotCard({ h, onMarkFake, isLatest }) {
         </div>
       )}
 
-      <div className="p-4">
+      <div className="p-2.5">
         {/* Meta row */}
-        <div className="flex items-center gap-2 mb-2.5 flex-wrap">
+        <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
           <span className={cn(
-            'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border',
+            'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium border',
             sourceStyles[h.source] || 'bg-white/5 text-gray-400 border-white/10'
           )}>
-            <span className="text-[12px] leading-none">{sourceIcons[h.source] || '📌'}</span>
             {h.source}
           </span>
-          {h.keyword_text && (
-            <span className="text-[11px] text-indigo-300/40 font-mono tracking-tight">
-              #{h.keyword_text}
-            </span>
-          )}
-          <span className="text-[11px] text-white/15 ml-auto font-mono tabular-nums">
+          <span className="text-[10px] text-white/15 ml-auto font-mono tabular-nums">
             {timeAgo(h.discovered_at)}
           </span>
         </div>
@@ -98,41 +92,39 @@ function HotspotCard({ h, onMarkFake, isLatest }) {
           target="_blank"
           rel="noopener noreferrer"
           onClick={(e) => e.stopPropagation()}
-          className="block text-[13px] text-white/85 hover:text-indigo-300 transition-colors font-medium leading-relaxed line-clamp-2"
+          className="block text-[12px] text-white/85 hover:text-indigo-300 transition-colors font-medium leading-snug line-clamp-1"
         >
           {h.title}
         </a>
 
         {/* Expanded detail */}
         {expanded && (
-          <div className="mt-3 space-y-2.5 animate-slide-up">
+          <div className="mt-2 space-y-1.5 text-[11px] animate-slide-up">
             {h.summary && (
-              <p className="text-[12px] text-white/35 leading-relaxed">{h.summary}</p>
+              <p className="text-white/30 leading-relaxed">{h.summary.slice(0, 120)}</p>
             )}
             {h.ai_reason && (
               <div className={cn(
-                'text-[11px] px-3 py-2 rounded-xl leading-relaxed border',
+                'px-2 py-1 rounded-lg leading-relaxed border',
                 isFake
-                  ? 'bg-rose-500/5 text-rose-400/70 border-rose-500/10'
-                  : 'bg-emerald-500/5 text-emerald-400/60 border-emerald-500/10'
+                  ? 'bg-rose-500/5 text-rose-400/60 border-rose-500/10'
+                  : 'bg-emerald-500/5 text-emerald-400/50 border-emerald-500/10'
               )}>
-                <span className="mr-1">🤖</span>
-                {h.ai_reason}
+                {h.ai_reason.slice(0, 80)}
               </div>
             )}
           </div>
         )}
 
         {/* Bottom bar */}
-        <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-white/[0.02]">
-          {/* Score badge */}
+        <div className="flex items-center gap-1.5 mt-1.5 pt-1.5 border-t border-white/[0.02]">
           <span className={cn(
-            'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold',
+            'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold',
             scoreBg, scoreColor
           )}>
-            {isFake ? '🚫 虚假' : `${score}%`}
+            {isFake ? '🚫' : `${score}%`}
           </span>
-          <div className="flex-1" />
+          <span className="flex-1" />
           {!isFake && (
             <button
               onClick={(e) => { e.stopPropagation(); onMarkFake?.(h.id); }}
@@ -293,9 +285,8 @@ export default function HotspotTimeline({ hotspots = [], loading, onMarkFake }) 
   return (
     <div className="animate-fade-in flex flex-col h-full">
       {/* ====== 筛选栏 ====== */}
-      <div className="flex-shrink-0 mb-3 rounded-xl border border-white/[0.08] bg-white/[0.03] p-1.5 shadow-[0_2px_12px_rgba(0,0,0,0.15)] relative z-10" style={{ backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)' }}>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {/* 状态 tabs */}
+      <div className="flex-shrink-0 mb-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] p-1">
+        <div className="flex items-center gap-1 flex-wrap">\n          {/* 状态 tabs */}
           {statusTabs.map(f => (
             <button
               key={f.id}
@@ -304,7 +295,7 @@ export default function HotspotTimeline({ hotspots = [], loading, onMarkFake }) 
                 persist({ statusFilter: f.id });
               }}
               className={cn(
-                'relative px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all duration-300',
+                'relative px-2 py-1 rounded-md text-[11px] font-medium transition-all duration-300',
                 statusFilter === f.id
                   ? 'bg-white/[0.08] text-white/90 shadow-[0_1px_4px_rgba(0,0,0,0.2)] backdrop-blur-sm'
                   : 'text-white/25 hover:text-white/55 hover:bg-white/[0.03]'
@@ -328,7 +319,7 @@ export default function HotspotTimeline({ hotspots = [], loading, onMarkFake }) 
                 persist({ timeRange: t.id });
               }}
               className={cn(
-                'px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all duration-200 border',
+                'px-2 py-0.5 rounded-md text-[10px] font-medium transition-all duration-200 border',
                 timeRange === t.id
                   ? 'bg-white/[0.06] text-white/70 border-white/[0.08] shadow-[0_1px_3px_rgba(0,0,0,0.12)]'
                   : 'text-white/20 border-transparent hover:text-white/45 hover:bg-white/[0.02]'

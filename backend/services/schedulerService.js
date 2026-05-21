@@ -135,7 +135,6 @@ function titleSimilarity(a, b) {
  */
 async function runScan() {
   if (isScanning) {
-    // 超时自愈：如果扫描运行超过 5 分钟仍未结束，强制重置
     if (scanStartTime && (Date.now() - scanStartTime) > SCAN_TIMEOUT_MS) {
       console.warn('[Scheduler] ⚠️ 扫描超时（>5分钟），强制重置 isScanning');
       isScanning = false;
@@ -155,174 +154,30 @@ async function runScan() {
 
   try {
     const keywords = db.getAllKeywords().filter(k => k.enabled === 1);
-
     if (keywords.length === 0) {
       console.log('[Scheduler] 没有启用中的关键词，跳过扫描');
       lastScanResult = { total: 0, new: 0, fake: 0, duration: 0 };
       return lastScanResult;
     }
 
+    // P1: 关键词并行扫描（并发上限 3 个词）
+    const KW_CONCURRENCY = 3;
+    const allResults = [];
+    for (let i = 0; i < keywords.length; i += KW_CONCURRENCY) {
+      const batch = keywords.slice(i, i + KW_CONCURRENCY);
+      const batchResults = await Promise.allSettled(
+        batch.map(kw => scanKeyword(kw))
+      );
+      for (const r of batchResults) {
+        if (r.status === 'fulfilled') allResults.push(r.value);
+      }
+    }
+
     let totalNew = 0;
     let totalFake = 0;
-
-    for (const kw of keywords) {
-      console.log(`\n[Scheduler] 📡 扫描关键词: "${kw.keyword}"`);
-
-      // 分类关键词类型（首次扫描时缓存）
-      if (!keywordTypeCache.has(kw.keyword)) {
-        const kType = await classifyKeyword(kw.keyword);
-        keywordTypeCache.set(kw.keyword, kType);
-      }
-      const keywordType = keywordTypeCache.get(kw.keyword);
-
-      // Query Expansion：获取扩展搜索词（缓存的或新生成的）
-      let expansions = null;
-      const cached = queryExpansionCache.get(kw.keyword);
-      if (cached && (Date.now() - cached.ts) < EXPANSION_TTL) {
-        expansions = cached.data;
-      } else if (config.queryExpansion.enabled) {
-        expansions = await expandQuery(kw.keyword, keywordType);
-        queryExpansionCache.set(kw.keyword, { ts: Date.now(), data: expansions });
-      }
-
-      // 1. 从多源爬取（按类型优化搜索 + Query Expansion）
-      const results = await crawlAllSources(kw.keyword, kw.category, keywordType, expansions);
-      console.log(`[Scheduler] 共获取 ${results.length} 条原始结果`);
-
-      // 过滤已存在的 URL 和相似标题
-      const newItems = results.filter(item => {
-        if (db.urlAlreadyExists(item.url)) return false;
-        if (db.titleAlreadyExists(item.title)) return false;
-        return true;
-      });
-      console.log(`[Scheduler] 去重后剩余 ${newItems.length} 条新结果`);
-
-      if (newItems.length === 0) continue;
-
-      // A1: 标题相似度去重，减少重复 AI 调用
-      const toVerify = config.queryExpansion.enabled
-        ? deduplicateByTitle(newItems)
-        : newItems;
-
-      // 2. AI 验证 + 实时入库（完成一条入库一条，不等全部）
-      const CONCURRENCY = 3;
-      let kwNewCount = 0;
-      const { minSaveScore, notifyScore } = config.relevance;
-
-      for (let i = 0; i < toVerify.length; i += CONCURRENCY) {
-        const batch = toVerify.slice(i, i + CONCURRENCY);
-        const batchResults = await Promise.allSettled(
-          batch.map(item => {
-            const credibility = getCredibilityTier(item.source, item.url);
-            return verifyHotspot(kw.keyword, item.title, item.summary, item.source, credibility);
-          })
-        );
-        // 逐条实时处理
-        for (let j = 0; j < batch.length; j++) {
-          const item = batch[j];
-          const aiRaw = batchResults[j];
-          const aiResult = aiRaw.status === 'fulfilled'
-            ? aiRaw.value
-            : { isRelevant: true, isFake: false, score: 0.5, reason: 'AI验证失败，默认通过', contentSubject: '', matchMode: 'error' };
-
-          const credibilityTier = getCredibilityTier(item.source, item.url);
-          const finalScore = computeFinalScore(aiResult.score, credibilityTier, kw.keyword, item.title, item.published_at);
-
-          // 低于入库阈值 → 直接丢弃
-          if (finalScore < minSaveScore) {
-            logDecision({
-              ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
-              source: item.source, credibilityTier,
-              aiScore: aiResult.score, finalScore,
-              contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
-              isRelevant: aiResult.isRelevant, isFake: aiResult.isFake,
-              saved: false, action: 'low_score',
-              reviewed: false,
-            });
-            console.log(`[Scheduler] ⏭️ 低分跳过(${finalScore}): "${item.title.substring(0, 50)}"`);
-            continue;
-          }
-
-          if (aiResult.isFake) {
-            db.addHotspot({
-              keyword_id: kw.id,
-              title: item.title,
-              url: item.url,
-              source: item.source,
-              summary: item.summary,
-              ai_score: finalScore,
-              ai_reason: aiResult.reason,
-              is_verified: 1,
-              is_fake: 1,
-              published_at: item.published_at,
-            });
-            totalFake++;
-            logDecision({
-              ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
-              source: item.source, credibilityTier,
-              aiScore: aiResult.score, finalScore,
-              contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
-              isRelevant: false, isFake: true,
-              saved: true, action: 'fake',
-              reviewed: false,
-            });
-            console.log(`[Scheduler] ❌ 虚假/蹭热度: "${item.title.substring(0, 50)}"`);
-            continue;
-          }
-
-          if (!aiResult.isRelevant) {
-            logDecision({
-              ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
-              source: item.source, credibilityTier,
-              aiScore: aiResult.score, finalScore,
-              contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
-              isRelevant: false, isFake: false,
-              saved: false, action: 'irrelevant',
-              reviewed: false,
-            });
-            console.log(`[Scheduler] ⏭️ AI判定无关: "${item.title.substring(0, 50)}"`);
-            continue;
-          }
-
-          // 通过所有过滤 → 入库
-          const hotspot = db.addHotspot({
-            keyword_id: kw.id,
-            title: item.title,
-            url: item.url,
-            source: item.source,
-            summary: item.summary,
-            ai_score: finalScore,
-            ai_reason: `${aiResult.reason} | 主题:${aiResult.contentSubject}`,
-            is_verified: 1,
-            is_fake: 0,
-            published_at: item.published_at,
-          });
-
-          logDecision({
-            ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
-            source: item.source, credibilityTier,
-            aiScore: aiResult.score, finalScore,
-            contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
-            isRelevant: true, isFake: false,
-            saved: true, action: 'saved',
-            reviewed: false,
-          });
-
-          if (finalScore >= notifyScore) {
-            await sendNotification(hotspot);
-            db.addNotification(hotspot.id, 'browser', null);
-            if (config.email.user) {
-              db.addNotification(hotspot.id, 'email', config.email.to);
-            }
-          }
-
-          kwNewCount++;
-          totalNew++;
-          console.log(`[Scheduler] 🟢 入库(${finalScore}): "${item.title.substring(0, 50)}" [${aiResult.matchMode}]`);
-        }
-      }
-
-      console.log(`[Scheduler] ✅ "${kw.keyword}" 新增 ${kwNewCount} 条真实热点`);
+    for (const r of allResults) {
+      totalNew += r.new;
+      totalFake += r.fake;
     }
 
     const duration = Math.round((Date.now() - startTime) / 1000);
@@ -337,6 +192,163 @@ async function runScan() {
     isScanning = false;
     scanStartTime = null;
   }
+}
+
+/** 单个关键词扫描（供并行调用） */
+async function scanKeyword(kw) {
+  let kwNew = 0;
+  let kwFake = 0;
+
+  console.log(`\n[Scheduler] 📡 扫描关键词: "${kw.keyword}"`);
+
+  // 分类关键词类型
+  if (!keywordTypeCache.has(kw.keyword)) {
+    const kType = await classifyKeyword(kw.keyword);
+    keywordTypeCache.set(kw.keyword, kType);
+  }
+  const keywordType = keywordTypeCache.get(kw.keyword);
+
+  // Query Expansion
+  let expansions = null;
+  const cached = queryExpansionCache.get(kw.keyword);
+  if (cached && (Date.now() - cached.ts) < EXPANSION_TTL) {
+    expansions = cached.data;
+  } else if (config.queryExpansion.enabled) {
+    expansions = await expandQuery(kw.keyword, keywordType);
+    queryExpansionCache.set(kw.keyword, { ts: Date.now(), data: expansions });
+  }
+
+  const results = await crawlAllSources(kw.keyword, kw.category, keywordType, expansions);
+  console.log(`[Scheduler] "${kw.keyword}" 共获取 ${results.length} 条原始结果`);
+
+  const newItems = results.filter(item => {
+    if (db.urlAlreadyExists(item.url)) return false;
+    if (db.titleAlreadyExists(item.title)) return false;
+    return true;
+  });
+  console.log(`[Scheduler] "${kw.keyword}" 去重后剩余 ${newItems.length} 条新结果`);
+
+  if (newItems.length === 0) return { new: 0, fake: 0 };
+
+  const toVerify = config.queryExpansion.enabled
+    ? deduplicateByTitle(newItems)
+    : newItems;
+
+  // P2: AI 并发从 3 提升到 5
+  const AI_CONCURRENCY = 5;
+  const { minSaveScore, notifyScore } = config.relevance;
+
+  for (let i = 0; i < toVerify.length; i += AI_CONCURRENCY) {
+    const batch = toVerify.slice(i, i + AI_CONCURRENCY);
+    const batchResults = await Promise.allSettled(
+      batch.map(item => {
+        const credibility = getCredibilityTier(item.source, item.url);
+        return verifyHotspot(kw.keyword, item.title, item.summary, item.source, credibility);
+      })
+    );
+    for (let j = 0; j < batch.length; j++) {
+      const item = batch[j];
+      const aiRaw = batchResults[j];
+      const aiResult = aiRaw.status === 'fulfilled'
+        ? aiRaw.value
+        : { isRelevant: true, isFake: false, score: 0.5, reason: 'AI验证失败，默认通过', contentSubject: '', matchMode: 'error' };
+
+      const credibilityTier = getCredibilityTier(item.source, item.url);
+      const finalScore = computeFinalScore(aiResult.score, credibilityTier, kw.keyword, item.title, item.published_at);
+
+      if (finalScore < minSaveScore) {
+        logDecision({
+          ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
+          source: item.source, credibilityTier,
+          aiScore: aiResult.score, finalScore,
+          contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
+          isRelevant: aiResult.isRelevant, isFake: aiResult.isFake,
+          saved: false, action: 'low_score',
+          reviewed: false,
+        });
+        console.log(`[Scheduler] ⏭️ 低分跳过(${finalScore}): "${item.title.substring(0, 50)}"`);
+        continue;
+      }
+
+      if (aiResult.isFake) {
+        db.addHotspot({
+          keyword_id: kw.id,
+          title: item.title,
+          url: item.url,
+          source: item.source,
+          summary: item.summary,
+          ai_score: finalScore,
+          ai_reason: aiResult.reason,
+          is_verified: 1,
+          is_fake: 1,
+          published_at: item.published_at,
+        });
+        kwFake++;
+        logDecision({
+          ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
+          source: item.source, credibilityTier,
+          aiScore: aiResult.score, finalScore,
+          contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
+          isRelevant: false, isFake: true,
+          saved: true, action: 'fake',
+          reviewed: false,
+        });
+        console.log(`[Scheduler] ❌ 虚假/蹭热度: "${item.title.substring(0, 50)}"`);
+        continue;
+      }
+
+      if (!aiResult.isRelevant) {
+        logDecision({
+          ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
+          source: item.source, credibilityTier,
+          aiScore: aiResult.score, finalScore,
+          contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
+          isRelevant: false, isFake: false,
+          saved: false, action: 'irrelevant',
+          reviewed: false,
+        });
+        console.log(`[Scheduler] ⏭️ AI判定无关: "${item.title.substring(0, 50)}"`);
+        continue;
+      }
+
+      const hotspot = db.addHotspot({
+        keyword_id: kw.id,
+        title: item.title,
+        url: item.url,
+        source: item.source,
+        summary: item.summary,
+        ai_score: finalScore,
+        ai_reason: `${aiResult.reason} | 主题:${aiResult.contentSubject}`,
+        is_verified: 1,
+        is_fake: 0,
+        published_at: item.published_at,
+      });
+
+      logDecision({
+        ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
+        source: item.source, credibilityTier,
+        aiScore: aiResult.score, finalScore,
+        contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
+        isRelevant: true, isFake: false,
+        saved: true, action: 'saved',
+        reviewed: false,
+      });
+
+      if (finalScore >= notifyScore) {
+        await sendNotification(hotspot);
+        db.addNotification(hotspot.id, 'browser', null);
+        if (config.email.user) {
+          db.addNotification(hotspot.id, 'email', config.email.to);
+        }
+      }
+
+      kwNew++;
+      console.log(`[Scheduler] 🟢 入库(${finalScore}): "${item.title.substring(0, 50)}" [${aiResult.matchMode}]`);
+    }
+  }
+
+  console.log(`[Scheduler] ✅ "${kw.keyword}" 新增 ${kwNew} 条真实热点`);
+  return { new: kwNew, fake: kwFake };
 }
 
 /**
