@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const db = require('../models/database');
 const { crawlAllSources } = require('./crawlerService');
-const { verifyHotspot, classifyKeyword } = require('./aiService');
+const { verifyHotspot, classifyKeyword, expandQuery } = require('./aiService');
 const { sendNotification } = require('./notifierService');
 const config = require('../config');
 
@@ -15,6 +15,9 @@ const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 单次扫描最长 5 分钟，超时�
 
 // 缓存关键词分类结果
 const keywordTypeCache = new Map();
+// 缓存 Query Expansion 结果（TTL: 1 小时）
+const queryExpansionCache = new Map();
+const EXPANSION_TTL = 60 * 60 * 1000;
 
 // AI 决策日志路径（用于评估）
 const DECISION_LOG = path.join(__dirname, '..', 'tests', 'ai_decisions.jsonl');
@@ -102,8 +105,18 @@ async function runScan() {
       }
       const keywordType = keywordTypeCache.get(kw.keyword);
 
-      // 1. 从多源爬取（按类型优化搜索）
-      const results = await crawlAllSources(kw.keyword, kw.category, keywordType);
+      // Query Expansion：获取扩展搜索词（缓存的或新生成的）
+      let expansions = null;
+      const cached = queryExpansionCache.get(kw.keyword);
+      if (cached && (Date.now() - cached.ts) < EXPANSION_TTL) {
+        expansions = cached.data;
+      } else if (config.queryExpansion.enabled) {
+        expansions = await expandQuery(kw.keyword, keywordType);
+        queryExpansionCache.set(kw.keyword, { ts: Date.now(), data: expansions });
+      }
+
+      // 1. 从多源爬取（按类型优化搜索 + Query Expansion）
+      const results = await crawlAllSources(kw.keyword, kw.category, keywordType, expansions);
       console.log(`[Scheduler] 共获取 ${results.length} 条原始结果`);
 
       // 过滤已存在的 URL 和相似标题

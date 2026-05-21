@@ -443,36 +443,57 @@ async function searchGoogleNews(keyword) {
 }
 
 /**
- * 综合多源爬取
+ * 综合多源爬取（支持 Query Expansion）
+ * @param {string} keyword - 原始关键词
+ * @param {string} category - 分类
+ * @param {string} keywordType - person/organization/topic
+ * @param {Object} [expansions] - 扩展搜索词（可选）
+ * @param {string[]} [expansions.chinese] - 中文扩展词
+ * @param {string[]} [expansions.english] - 英文扩展词
  */
-async function crawlAllSources(keyword, category = 'general', keywordType = 'topic') {
+async function crawlAllSources(keyword, category = 'general', keywordType = 'topic', expansions = null) {
   const allResults = [];
   const sources = config.crawler.sources || ['web', 'twitter'];
 
+  // 为不同语言源分配搜索词
+  const cnQueries = expansions?.chinese?.length
+    ? [keyword, ...expansions.chinese]
+    : [keyword];
+  const enQueries = expansions?.english?.length
+    ? [keyword, ...expansions.english]
+    : [keyword];
+
   const tasks = [];
   if (sources.includes('web')) {
-    tasks.push(searchWeb(keyword));          // DuckDuckGo
-    tasks.push(searchBingNews(keyword));     // Bing News
-    tasks.push(searchSogou(keyword));        // 搜狗搜索
-    tasks.push(searchGoogleNews(keyword));   // Google News
+    // DuckDuckGo（中英通用）：优先用英文扩展
+    for (const q of enQueries) tasks.push(searchWeb(q));
+    // Bing News（中英通用）
+    for (const q of enQueries) tasks.push(searchBingNews(q));
+    // 搜狗搜索（中文优先）
+    for (const q of cnQueries) tasks.push(searchSogou(q));
+    // Google News（中英通用）
+    for (const q of enQueries) tasks.push(searchGoogleNews(q));
   }
   if (sources.includes('twitter')) {
-    tasks.push(searchTwitter(keyword));
+    for (const q of [...cnQueries, ...enQueries]) tasks.push(searchTwitter(q));
   }
   if (sources.includes('bilibili')) {
-    tasks.push(searchBilibili(keyword));
-    // Bilibili 人物搜索：仅对 person 类型执行
+    // Bilibili（中文优先）
+    for (const q of cnQueries) tasks.push(searchBilibili(q));
     if (keywordType === 'person') {
-      tasks.push(searchBilibiliForPerson(keyword));
+      for (const q of cnQueries) tasks.push(searchBilibiliForPerson(q));
     }
   }
   if (sources.includes('hackernews')) {
-    tasks.push(searchHackerNews(keyword));
+    // HackerNews 纯英文源：只用英文扩展词，跳过原中文词
+    for (const q of (expansions?.english?.length ? expansions.english : [keyword])) {
+      tasks.push(searchHackerNews(q));
+    }
   }
 
   // 人物/组织类关键词：增加针对性搜索
   if (keywordType === 'organization') {
-    tasks.push(searchOrgInfo(keyword));
+    for (const q of cnQueries) tasks.push(searchOrgInfo(q));
   }
 
   const settled = await Promise.allSettled(tasks);

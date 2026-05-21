@@ -221,4 +221,83 @@ async function classifyKeyword(keyword) {
   }
 }
 
-module.exports = { verifyHotspot, rankAndDeduplicate, classifyKeyword };
+/**
+ * Query Expansion：为关键词生成多语言扩展搜索词
+ * @param {string} keyword - 原始关键词
+ * @param {string} keywordType - person/organization/topic
+ * @returns {Object} { original, chinese: string[], english: string[] }
+ */
+async function expandQuery(keyword, keywordType = 'topic') {
+  if (!config.openrouter.apiKey || !config.queryExpansion.enabled) {
+    return { original: keyword, chinese: [keyword], english: [keyword] };
+  }
+
+  const prompt = `你是一个搜索引擎查询扩展专家。请为以下监控关键词生成扩展搜索词，帮助从不同语言的信息源找到更多相关内容。
+
+【关键词】"${keyword}"
+【类型】${keywordType === 'person' ? '人名/个人IP' : keywordType === 'organization' ? '组织/品牌' : '技术话题/概念'}
+
+请生成：
+1. 与关键词意思相近的中文搜索词（同义词、别名、上位词）
+2. 与关键词相关的英文搜索词（翻译、英文同义词、相关术语）
+3. 各 2-3 个词，不要重复原词
+
+要求：
+- 扩展词之间用 "/" 分隔
+- 不要编号，不要解释
+- 中文词不能包含英文，英文词不能包含中文
+- 如果关键词已经是英文，中文扩展词提供常见中文翻译
+
+返回格式（严格按此格式，不要其他内容）：
+中文扩展词: 词1/词2/词3
+英文扩展词: 词1/词2/词3`;
+
+  try {
+    const response = await axios.post(
+      `${config.openrouter.baseUrl}/chat/completions`,
+      {
+        model: config.openrouter.model,
+        messages: [
+          { role: 'system', content: '你是搜索查询扩展专家。只按指定格式返回，不要多余内容。' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.2,
+        max_tokens: 150,
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${config.openrouter.apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'http://localhost:5173',
+          'X-Title': 'Hot Monitor',
+        },
+        timeout: 15000,
+      }
+    );
+
+    const content = response.data.choices[0].message.content.trim();
+    const chineseMatch = content.match(/中文扩展词:\s*(.+)/);
+    const englishMatch = content.match(/英文扩展词:\s*(.+)/);
+
+    const chinese = chineseMatch
+      ? chineseMatch[1].split('/').map(s => s.trim()).filter(Boolean).slice(0, config.queryExpansion.maxExpansionsPerSource)
+      : [];
+    const english = englishMatch
+      ? englishMatch[1].split('/').map(s => s.trim()).filter(Boolean).slice(0, config.queryExpansion.maxExpansionsPerSource)
+      : [];
+
+    const result = {
+      original: keyword,
+      chinese: chinese.length > 0 ? chinese : [keyword],
+      english: english.length > 0 ? english : [keyword],
+    };
+
+    console.log(`[AI] expandQuery "${keyword}" => zh:${result.chinese.join('/')} en:${result.english.join('/')}`);
+    return result;
+  } catch (err) {
+    console.error(`[AI] expandQuery error for "${keyword}":`, err.message);
+    return { original: keyword, chinese: [keyword], english: [keyword] };
+  }
+}
+
+module.exports = { verifyHotspot, rankAndDeduplicate, classifyKeyword, expandQuery };

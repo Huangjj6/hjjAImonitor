@@ -41,6 +41,12 @@ module.exports = {
     titleKeywordBonus: 0.15,   // 关键词原词命中标题加分
   },
 
+  // Query Expansion：搜索词扩展
+  queryExpansion: {
+    enabled: true,             // 是否启用搜索词扩展
+    maxExpansionsPerSource: 2, // 每个源最多扩展词数
+  },
+
   // 来源可信度加权（Tier 1 最高）
   sourceCredibility: {
     official:  { tier: 1, weight: 1.00, label: '官方媒体', domains: ['gov.cn', 'xinhuanet.com', 'people.com.cn', 'cctv.com', 'bbc.com', 'reuters.com', 'ap.org', 'bloomberg.com'] },
