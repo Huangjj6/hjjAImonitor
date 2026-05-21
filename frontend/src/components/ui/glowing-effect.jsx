@@ -35,7 +35,7 @@ export function GlowingEffect({ children, className, containerClassName }) {
 /**
  * Glowing stats card with animated left border accent.
  */
-export function StatCard({ icon, label, value, sub, accent = 'emerald', className }) {
+export function StatCard({ icon, label, value, sub, accent = 'emerald', className, children }) {
   const accents = {
     emerald: 'from-emerald-400 to-teal-500/20',
     cyan: 'from-cyan-400 to-sky-500/20',
@@ -97,6 +97,7 @@ export function StatCard({ icon, label, value, sub, accent = 'emerald', classNam
             {sub}
           </div>
         )}
+        {children}
       </div>
     </div>
   );

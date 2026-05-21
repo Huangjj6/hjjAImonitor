@@ -82,4 +82,10 @@ router.post('/generate-demo', (req, res) => {
   res.json({ success: true, message: `已生成 ${added} 条演示数据` });
 });
 
+// 清空所有热点和通知
+router.delete('/', (req, res) => {
+  const count = db.clearAllHotspots();
+  res.json({ success: true, message: `已清空 ${count} 条热点` });
+});
+
 module.exports = router;

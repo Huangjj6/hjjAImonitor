@@ -298,6 +298,13 @@ function getAllSettings() {
   return result;
 }
 
+function clearAllHotspots() {
+  const count = queryOne('SELECT COUNT(*) as cnt FROM hotspots');
+  runSql('DELETE FROM hotspots');
+  runSql('DELETE FROM notifications');
+  return count?.cnt || 0;
+}
+
 module.exports = {
   getDb,
   getAllKeywords,
@@ -318,4 +325,5 @@ module.exports = {
   getSetting,
   setSetting,
   getAllSettings,
+  clearAllHotspots,
 };

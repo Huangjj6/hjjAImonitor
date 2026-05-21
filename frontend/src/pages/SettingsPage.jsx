@@ -1,12 +1,30 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
 import { cn } from '../lib/utils';
 
 export default function SettingsPage() {
-  const { get, post, put } = useApi();
+  const { get, post, put, del } = useApi();
   const [settings, setSettings] = useState({});
   const [configStatus, setConfigStatus] = useState({});
   const [saveMsg, setSaveMsg] = useState('');
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const scanTimer = useRef(null);
+
+  // 轮询扫描状态，扫描完成后自动恢复按钮
+  const pollScanStatus = useCallback(async () => {
+    const res = await get('/settings/scheduler-status');
+    if (res?.success && !res.data.isScanning) {
+      setIsScanning(false);
+      if (scanTimer.current) { clearInterval(scanTimer.current); scanTimer.current = null; }
+      setSaveMsg(`✅ 扫描完成 (${res.data.lastScan?.new || 0} 条新增)`);
+      setTimeout(() => setSaveMsg(''), 3000);
+    }
+  }, [get]);
+
+  useEffect(() => {
+    return () => { if (scanTimer.current) clearInterval(scanTimer.current); };
+  }, []);
 
   useEffect(() => {
     loadSettings();
@@ -32,8 +50,17 @@ export default function SettingsPage() {
 
   const handleTriggerScan = async () => {
     const res = await post('/settings/trigger-scan');
-    setSaveMsg(res.message || '扫描已启动');
-    setTimeout(() => setSaveMsg(''), 3000);
+    if (!res.success) {
+      setSaveMsg(res.message || '扫描失败');
+      setTimeout(() => setSaveMsg(''), 3000);
+      return;
+    }
+    setIsScanning(true);
+    setSaveMsg('扫描已启动...');
+    // 3 秒后 toast 自动消失，之后由轮询覆盖为完成消息
+    setTimeout(() => { if (scanTimer.current) setSaveMsg(''); }, 3000);
+    // 每 2 秒轮询，直到扫描完成
+    scanTimer.current = setInterval(pollScanStatus, 2000);
   };
 
   const handleSchedulerStatus = async () => {
@@ -42,6 +69,13 @@ export default function SettingsPage() {
       setSaveMsg(`调度器: ${res.data.running ? '运行中' : '已停止'} · 间隔 ${res.data.intervalMinutes} 分钟`);
       setTimeout(() => setSaveMsg(''), 3000);
     }
+  };
+
+  const handleClearHotspots = async () => {
+    setShowClearConfirm(false);
+    const res = await del('/hotspots');
+    setSaveMsg(res.message || '操作完成');
+    setTimeout(() => setSaveMsg(''), 3000);
   };
 
   const SectionHeader = ({ icon, iconColor, title }) => (
@@ -210,14 +244,59 @@ export default function SettingsPage() {
       <Card>
         <SectionHeader icon="🎮" iconColor="amber" title="手动操作" />
         <div className="flex flex-wrap gap-3">
-          <button onClick={handleTriggerScan} className="btn-neon btn-neon-primary">
-            🚀 立即扫描
+          <button
+            onClick={handleTriggerScan}
+            disabled={isScanning}
+            className={cn(
+              'btn-neon btn-neon-primary disabled:opacity-50 disabled:cursor-not-allowed',
+              isScanning && 'animate-pulse'
+            )}
+          >
+            {isScanning ? '⏳ 扫描中...' : '🚀 立即扫描'}
           </button>
           <button onClick={handleSchedulerStatus} className="btn-neon">
             📊 调度状态
           </button>
+          <span className="w-px h-8 bg-white/[0.06]" />
+          <button
+            onClick={() => setShowClearConfirm(true)}
+            className="btn-neon text-rose-400/70 hover:text-rose-300 border-rose-500/10 hover:border-rose-500/20"
+          >
+            🗑 清空热点
+          </button>
         </div>
       </Card>
+
+      {/* 清空确认弹窗 */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="rounded-2xl border border-rose-500/20 bg-[#0d0d1a] p-6 max-w-sm w-full mx-4 shadow-[0_16px_48px_rgba(0,0,0,0.5)] animate-slide-up">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-xl">
+                ⚠️
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-white/85">确认清空所有热点</h3>
+                <p className="text-[11px] text-white/30 mt-0.5">此操作将删除所有热点和通知记录，不可撤销</p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="flex-1 btn-neon text-sm"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleClearHotspots}
+                className="flex-1 px-4 py-2 rounded-xl text-sm font-medium bg-rose-500/15 border border-rose-500/20 text-rose-400 hover:bg-rose-500/20 transition-all duration-200"
+              >
+                确认清空
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 配置说明 */}
       <Card>

@@ -70,7 +70,7 @@ async function searchWeb(keyword) {
           url: cleanUrl,
           source: 'DuckDuckGo',
           summary: cleanHtml(summary).substring(0, 300),
-          published_at: new Date().toISOString(),
+          published_at: null, // HTML 搜索结果无真实时间戳
         });
       }
     });
@@ -130,40 +130,42 @@ async function searchTwitter(keyword) {
 }
 
 /**
- * Bing News RSS 搜索
+ * Bing 新闻搜索（用通用搜索 + news 后缀，专用新闻页已被封）
  */
 async function searchBingNews(keyword) {
   const results = [];
-  const query = encodeURIComponent(keyword);
-  const searchUrl = `https://www.bing.com/news/search?q=${query}&format=rss`;
+  const query = encodeURIComponent(`${keyword} news`);
+  const url = `https://www.bing.com/search?q=${query}&setlang=en-US`;
 
   try {
-    const response = await axios.get(searchUrl, {
+    const response = await axios.get(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/rss+xml, application/xml, text/xml',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.bing.com/',
       },
-      timeout: 15000,
+      timeout: 10000,
     });
 
-    const $ = cheerio.load(response.data, { xmlMode: true });
-    const items = $('item');
+    const $ = cheerio.load(response.data);
+    const links = $('.b_algo, .b_algo h2 a');
 
-    items.each((i, el) => {
+    links.each((i, el) => {
       if (i >= config.crawler.maxResultsPerSource) return false;
-      const title = $(el).find('title').text().trim();
-      const link = $(el).find('link').text().trim();
-      const pubDate = $(el).find('pubDate').text().trim();
-      const description = $(el).find('description').text().trim();
+      const titleEl = $(el).is('h2 a') ? $(el) : $(el).find('h2 a').first();
+      const title = titleEl.text().trim();
+      const link = titleEl.attr('href') || '';
+      const summaryEl = $(el).find('.b_caption p, .b_lineclamp2');
+      const summary = summaryEl.text().trim();
 
-      if (title && link) {
+      if (title && link && link.startsWith('http')) {
         results.push({
           title: cleanHtml(title),
           url: link,
           source: 'Bing News',
-          summary: cleanHtml(description).substring(0, 300),
-          published_at: pubDate ? new Date(pubDate).toISOString() : null,
+          summary: cleanHtml(summary).substring(0, 300),
+          published_at: null,
         });
       }
     });
@@ -214,7 +216,7 @@ async function searchSogou(keyword) {
             url: cleanUrl,
             source: '搜狗搜索',
             summary: '',
-            published_at: new Date().toISOString(),
+            published_at: null,
           });
         }
       });
@@ -238,7 +240,7 @@ async function searchSogou(keyword) {
           url: cleanUrl,
           source: '搜狗搜索',
           summary: cleanHtml(summary).substring(0, 300),
-          published_at: new Date().toISOString(),
+          published_at: null,
         });
       }
     });
@@ -400,7 +402,8 @@ async function searchHackerNews(keyword) {
 async function searchGoogleNews(keyword) {
   const results = [];
   const query = encodeURIComponent(keyword);
-  const url = `https://news.google.com/rss/search?q=${query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans`;
+  // 去掉 gl=CN 参数，避免在某些网络环境下被阻断
+  const url = `https://news.google.com/rss/search?q=${query}&hl=en-US`;
 
   try {
     const response = await axios.get(url, {
@@ -455,8 +458,11 @@ async function crawlAllSources(keyword, category = 'general', keywordType = 'top
   const allResults = [];
   const sources = config.crawler.sources || ['web', 'twitter'];
 
+  // 检测关键词主要语言：英文关键词不扩展为中文搜索
+  const isEnglish = /^[a-zA-Z0-9\s\-_.+]+$/.test(keyword.trim());
+
   // 为不同语言源分配搜索词
-  const cnQueries = expansions?.chinese?.length
+  const cnQueries = expansions?.chinese?.length && !isEnglish
     ? [keyword, ...expansions.chinese]
     : [keyword];
   const enQueries = expansions?.english?.length
@@ -464,36 +470,46 @@ async function crawlAllSources(keyword, category = 'general', keywordType = 'top
     : [keyword];
 
   const tasks = [];
+  // 英文关键词：所有源统一用英文扩展，避免中文翻译曲解原意
+  const webQueries = isEnglish ? enQueries : cnQueries;
+  const newsQueries = enQueries;
+
   if (sources.includes('web')) {
-    // DuckDuckGo（中英通用）：优先用英文扩展
-    for (const q of enQueries) tasks.push(searchWeb(q));
-    // Bing News（中英通用）
-    for (const q of enQueries) tasks.push(searchBingNews(q));
-    // 搜狗搜索（中文优先）
-    for (const q of cnQueries) tasks.push(searchSogou(q));
-    // Google News（中英通用）
-    for (const q of enQueries) tasks.push(searchGoogleNews(q));
+    for (const q of newsQueries) tasks.push(searchWeb(q));
+    for (const q of newsQueries) tasks.push(searchBingNews(q));
+    for (const q of webQueries) tasks.push(searchSogou(q));
+    for (const q of newsQueries) tasks.push(searchGoogleNews(q));
   }
   if (sources.includes('twitter')) {
-    for (const q of [...cnQueries, ...enQueries]) tasks.push(searchTwitter(q));
+    for (const q of newsQueries) tasks.push(searchTwitter(q));
   }
   if (sources.includes('bilibili')) {
-    // Bilibili（中文优先）
-    for (const q of cnQueries) tasks.push(searchBilibili(q));
+    for (const q of webQueries) tasks.push(searchBilibili(q));
     if (keywordType === 'person') {
-      for (const q of cnQueries) tasks.push(searchBilibiliForPerson(q));
+      for (const q of webQueries) tasks.push(searchBilibiliForPerson(q));
     }
   }
   if (sources.includes('hackernews')) {
-    // HackerNews 纯英文源：只用英文扩展词，跳过原中文词
     for (const q of (expansions?.english?.length ? expansions.english : [keyword])) {
       tasks.push(searchHackerNews(q));
     }
   }
+  if (sources.includes('gitee')) {
+    for (const q of enQueries) tasks.push(searchGitee(q));
+  }
+  if (sources.includes('reddit')) {
+    for (const q of enQueries) tasks.push(searchReddit(q));
+  }
+  if (sources.includes('oschina')) {
+    for (const q of webQueries) tasks.push(searchOschina(q));
+  }
+  if (sources.includes('github')) {
+    // GitHub Trending 不按关键词搜索，直接拉当日榜单
+    tasks.push(searchGitHubTrending());
+  }
 
-  // 人物/组织类关键词：增加针对性搜索
   if (keywordType === 'organization') {
-    for (const q of cnQueries) tasks.push(searchOrgInfo(q));
+    for (const q of webQueries) tasks.push(searchOrgInfo(q));
   }
 
   const settled = await Promise.allSettled(tasks);
@@ -506,13 +522,29 @@ async function crawlAllSources(keyword, category = 'general', keywordType = 'top
   const unique = allResults.filter(item => {
     if (!item.url || seen.has(item.url)) return false;
     seen.add(item.url);
-    // 按 URL 域名自动修正 source
     item.source = detectSourceByUrl(item.url, item.source);
     return true;
   });
 
+  // 按源设置上限：控制不可信时间源的占比
+  const sourceLimits = config.crawler.sourceMaxResults || {};
+  const sourceCount = {};
+  const capped = unique.filter(item => {
+    const limit = sourceLimits[item.source];
+    if (!limit) return true;
+    sourceCount[item.source] = (sourceCount[item.source] || 0) + 1;
+    return sourceCount[item.source] <= limit;
+  });
+
+  // 按发布时间倒序排列（最新优先），无时间戳的排末尾
+  capped.sort((a, b) => {
+    const ta = a.published_at ? new Date(a.published_at).getTime() : 0;
+    const tb = b.published_at ? new Date(b.published_at).getTime() : 0;
+    return tb - ta;
+  });
+
   await sleep(config.crawler.requestDelay);
-  return unique;
+  return capped;
 }
 
 /**
@@ -543,6 +575,25 @@ function cleanHtml(html) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * 按发布时间过滤旧数据
+ * @param {Array} results - 搜索结果
+ * @param {number} maxAgeHours - 保留 N 小时内，0=不限
+ * @returns {Array} 过滤后的结果
+ */
+function filterByAge(results, maxAgeHours) {
+  if (!maxAgeHours || maxAgeHours <= 0) return results;
+  const cutoff = Date.now() - maxAgeHours * 3600000;
+  return results.filter(item => {
+    if (!item.published_at) return true; // 无时间戳的保留
+    try {
+      return new Date(item.published_at).getTime() >= cutoff;
+    } catch {
+      return true;
+    }
+  });
 }
 
 /**
@@ -582,13 +633,63 @@ async function searchBilibiliForPerson(keyword) {
         summary: `简介: ${user.usign || '无'} | 粉丝: ${(user.fans || 0).toLocaleString()} | 视频: ${(user.videos || 0).toLocaleString()}`,
         published_at: new Date().toISOString(),
       });
+
+      // 同时获取该 UP 主的最新视频
+      const videoResults = await searchBilibiliSpaceVideos(user.mid);
+      results.push(...videoResults);
     }
 
-    console.log(`[Crawler] Bilibili 人物搜索 "${keyword}" => ${results.length} 个用户`);
+    console.log(`[Crawler] Bilibili 人物搜索 "${keyword}" => ${results.length} 条结果（含最新视频）`);
   } catch (err) {
     console.error(`[Crawler] Bilibili 人物搜索 error:`, err.message);
     const htmlResults = await searchBilibiliForPersonHtml(keyword);
     results.push(...htmlResults);
+  }
+
+  return results;
+}
+
+/**
+ * 获取 Bilibili UP 主空间最新视频
+ * @param {number} mid - UP 主的 mid
+ * @returns {Array} 最新视频列表
+ */
+async function searchBilibiliSpaceVideos(mid) {
+  const results = [];
+  if (!mid) return results;
+  const url = `https://api.bilibili.com/x/space/arc/search?mid=${mid}&ps=5&pn=1`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': `https://space.bilibili.com/${mid}`,
+        'Origin': 'https://space.bilibili.com',
+        'Accept': 'application/json, text/plain, */*',
+        'Cookie': 'buvid3=local; b_nut=1700000000; _uuid=local',
+      },
+      timeout: 10000,
+    });
+
+    const data = response.data;
+    if (data.code !== 0 || !data.data?.list?.vlist) {
+      console.warn(`[Crawler] Bilibili space API error: code=${data.code}`);
+      return results;
+    }
+
+    const videos = data.data.list.vlist.slice(0, 5);
+    for (const video of videos) {
+      results.push({
+        title: cleanHtml(video.title || '').substring(0, 120),
+        url: `https://www.bilibili.com/video/${video.bvid}`,
+        source: 'Bilibili',
+        summary: cleanHtml(video.description || '').substring(0, 300) ||
+                 `播放: ${(video.play || 0).toLocaleString()} | 弹幕: ${(video.video_review || 0).toLocaleString()}`,
+        published_at: video.created ? new Date(video.created * 1000).toISOString() : new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    console.error(`[Crawler] Bilibili space videos error:`, err.message);
   }
 
   return results;
@@ -704,6 +805,181 @@ async function searchBaiduBaike(keyword) {
   return results;
 }
 
+/**
+ * Gitee 搜索（免费 OpenAPI，无需 Key）
+ * 文档: https://gitee.com/api/v5/swagger
+ */
+async function searchGitee(keyword) {
+  const results = [];
+  const query = encodeURIComponent(keyword);
+  const url = `https://gitee.com/api/v5/search/repositories?q=${query}&sort=stars&order=desc&per_page=5`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+      },
+      timeout: 10000,
+    });
+
+    const repos = (response.data || []).slice(0, 5);
+    for (const repo of repos) {
+      if (!repo.full_name) continue;
+      results.push({
+        title: `${repo.full_name}${repo.language ? ` [${repo.language}]` : ''}`,
+        url: repo.html_url || '#',
+        source: 'Gitee',
+        summary: cleanHtml(repo.description || '').substring(0, 300)
+                 || `Stars: ${repo.stargazers_count || 0} | Forks: ${repo.forks_count || 0}`,
+        published_at: repo.updated_at || null,
+      });
+    }
+
+    console.log(`[Crawler] Gitee for "${keyword}" => ${results.length} results`);
+  } catch (err) {
+    console.error(`[Crawler] Gitee error:`, err.message);
+  }
+
+  return results;
+}
+
+/**
+ * Reddit 搜索（JSON feed，免费）
+ */
+async function searchReddit(keyword) {
+  const results = [];
+  const query = encodeURIComponent(keyword);
+  const url = `https://www.reddit.com/search.json?q=${query}&sort=new&limit=7`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+      },
+      timeout: 10000,
+    });
+
+    const posts = response.data?.data?.children || [];
+    for (const post of posts.slice(0, 7)) {
+      const d = post.data;
+      if (!d.title) continue;
+      results.push({
+        title: cleanHtml(d.title).substring(0, 120),
+        url: `https://www.reddit.com${d.permalink || ''}`,
+        source: 'Reddit',
+        summary: cleanHtml(d.selftext || '').substring(0, 300)
+                 || `Subreddit: r/${d.subreddit || 'unknown'} | Upvotes: ${d.ups || 0} | Comments: ${d.num_comments || 0}`,
+        published_at: d.created_utc ? new Date(d.created_utc * 1000).toISOString() : null,
+      });
+    }
+
+    console.log(`[Crawler] Reddit for "${keyword}" => ${results.length} results`);
+  } catch (err) {
+    console.error(`[Crawler] Reddit error:`, err.message);
+  }
+
+  return results;
+}
+
+/**
+ * 开源中国搜索（HTML 抓取）
+ */
+async function searchOschina(keyword) {
+  const results = [];
+  const query = encodeURIComponent(keyword);
+  const url = `https://www.oschina.net/search?q=${query}&scope=news`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Referer': 'https://www.oschina.net',
+      },
+      timeout: 10000,
+    });
+
+    const $ = cheerio.load(response.data);
+
+    // 新闻/问答/博客列表
+    const items = $('.item, .search-item, .blog-item, .news-item');
+    if (items.length > 0) {
+      items.each((i, el) => {
+        if (i >= config.crawler.maxResultsPerSource) return false;
+        const titleEl = $(el).find('a.title, .header a, h3 a').first();
+        const title = titleEl.text().trim();
+        const link = titleEl.attr('href') || '';
+        const desc = $(el).find('.description, .abstract, p').first().text().trim();
+
+        if (title && link) {
+          results.push({
+            title: cleanHtml(title),
+            url: link.startsWith('http') ? link : `https://www.oschina.net${link}`,
+            source: '开源中国',
+            summary: cleanHtml(desc).substring(0, 300),
+            published_at: null,
+          });
+        }
+      });
+    }
+
+    console.log(`[Crawler] 开源中国 for "${keyword}" => ${results.length} results`);
+  } catch (err) {
+    console.error(`[Crawler] 开源中国 error:`, err.message);
+  }
+
+  return results;
+}
+
+/**
+ * GitHub Trending（HTML 抓取，免费）
+ */
+async function searchGitHubTrending() {
+  const results = [];
+  const url = 'https://github.com/trending';
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+      timeout: 10000,
+    });
+
+    const $ = cheerio.load(response.data);
+    const repos = $('article.Box-row');
+
+    repos.each((i, el) => {
+      if (i >= 5) return false;
+      const titleEl = $(el).find('h2 a');
+      const title = titleEl.text().trim().replace(/\s+/g, ' ');
+      const link = titleEl.attr('href') || '';
+      const desc = $(el).find('p').first().text().trim();
+      const lang = $(el).find('[itemprop="programmingLanguage"]').text().trim();
+
+      if (title && link) {
+        results.push({
+          title: `${title}${lang ? ` [${lang}]` : ''}`,
+          url: `https://github.com${link}`,
+          source: 'GitHub Trending',
+          summary: cleanHtml(desc).substring(0, 300),
+          published_at: new Date().toISOString(), // Trending 是当日榜单
+        });
+      }
+    });
+
+    console.log(`[Crawler] GitHub Trending => ${results.length} results`);
+  } catch (err) {
+    console.error(`[Crawler] GitHub Trending error:`, err.message);
+  }
+
+  return results;
+}
+
 module.exports = {
   crawlAllSources,
   searchWeb,
@@ -715,4 +991,8 @@ module.exports = {
   searchGoogleNews,
   searchBilibiliForPerson,
   searchOrgInfo,
+  searchGitee,
+  searchReddit,
+  searchOschina,
+  searchGitHubTrending,
 };

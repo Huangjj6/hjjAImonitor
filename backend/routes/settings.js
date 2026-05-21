@@ -36,6 +36,10 @@ router.post('/trigger-scan', async (req, res) => {
   if (status.isScanning) {
     return res.json({ success: false, message: '扫描正在进行中，请稍后再试' });
   }
+  const keywords = db.getAllKeywords().filter(k => k.enabled === 1);
+  if (keywords.length === 0) {
+    return res.json({ success: false, message: '没有启用的关键词，请先添加' });
+  }
   // 先异步启动扫描，确保 isScanning 在响应前已置位
   const scanPromise = runScan();
   res.json({ success: true, message: '扫描已启动' });

@@ -38,6 +38,7 @@ export default function Dashboard({ notification, onDismissNotification }) {
   const [loading, setLoading] = useState(true);
   const [lastScan, setLastScan] = useState(null);
   const [pulseKey, setPulseKey] = useState(0);
+  const [scanning, setScanning] = useState(false);
 
   const loadData = useCallback(async () => {
     const [hotRes, kwRes] = await Promise.all([
@@ -56,6 +57,17 @@ export default function Dashboard({ notification, onDismissNotification }) {
     const timer = setInterval(loadData, 30000);
     return () => clearInterval(timer);
   }, [loadData]);
+
+  // 轮询扫描状态
+  useEffect(() => {
+    const check = async () => {
+      const res = await get('/settings/scheduler-status');
+      if (res?.success) setScanning(res.data.isScanning);
+    };
+    check();
+    const t = setInterval(check, 5000);
+    return () => clearInterval(t);
+  }, [get]);
 
   useEffect(() => {
     if (notification) loadData();
@@ -82,7 +94,7 @@ export default function Dashboard({ notification, onDismissNotification }) {
   const topSource = Object.entries(sourceDist).sort((a, b) => b[1] - a[1])[0];
 
   const stats = [
-    { label: '已发现', value: hotspots.length, sub: `最近 ${timeAgo(lastScan)} 刷新`, icon: '📡', accent: 'cyan' },
+    { label: '已发现', value: hotspots.length, sub: `最近 ${timeAgo(lastScan)} 刷新`, icon: '📡', accent: 'cyan', scanning: false },
     { label: '已确认', value: verified.length, sub: avgScore > 0 ? `平均相关度 ${avgScore}%` : '等待 AI 验证', icon: '✅', accent: 'emerald' },
     { label: '已过滤', value: fakes.length, sub: fakes.length > 0 ? 'AI 自动识别虚假内容' : '暂无虚假内容', icon: '🛡️', accent: 'rose' },
     { label: '监控词', value: enabledKw, sub: `${keywords.length} 个关键词，${enabledKw} 个启用`, icon: '🎯', accent: 'amber' },
@@ -102,7 +114,19 @@ export default function Dashboard({ notification, onDismissNotification }) {
             value={<AnimatedNumber value={s.value} />}
             sub={s.sub}
             accent={s.accent}
-          />
+          >
+            {s.label === '已发现' && (
+              <span className={cn(
+                'ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full transition-colors',
+                scanning
+                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                  : 'bg-white/[0.02] text-white/20 border border-white/[0.04]'
+              )}>
+                <span className={cn('w-1 h-1 rounded-full', scanning ? 'bg-cyan-400 animate-pulse' : 'bg-white/20')} />
+                {scanning ? '扫描中' : '待机'}
+              </span>
+            )}
+          </StatCard>
         ))}
       </div>
 

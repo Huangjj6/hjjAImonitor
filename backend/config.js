@@ -29,9 +29,13 @@ module.exports = {
   // Crawler settings
   crawler: {
     intervalMinutes: 10,       // 爬取间隔（分钟）
-    maxResultsPerSource: 5,    // 每个源最大结果数
+    maxResultsPerSource: 8,    // 每个源每次请求最大结果数
     requestDelay: 2000,        // 请求间延迟（ms）
-    sources: ['web', 'twitter', 'bilibili', 'hackernews'], // 启用的信息源: web(DuckDuckGo+Bing+搜狗+Google), twitter, bilibili, hackernews
+    maxAgeHours: 0,            // 0=不限时间范围，结果按发布时间倒序排列
+    sources: ['web', 'twitter', 'bilibili', 'hackernews', 'gitee', 'reddit', 'oschina', 'github'],
+    sourceMaxResults: {         // 按源限制最终入库上限（覆盖 maxResultsPerSource）
+      '搜狗搜索': 3,            // 搜狗无发布时间，降低权重避免旧文章占太多
+    },
   },
 
   // AI 相关性审核

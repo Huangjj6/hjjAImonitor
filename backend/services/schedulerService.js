@@ -36,10 +36,10 @@ function getCredibilityTier(source, url) {
   return 'unknown';
 }
 
-/** 综合评分：AI原始分 × 来源可信度权重 + 标题命中加分 */
-function computeFinalScore(aiScore, credibilityTier, keyword, title) {
+/** 综合评分：AI原始分 × 来源可信度权重 + 标题命中加分 × 时间新颖度因子 */
+function computeFinalScore(aiScore, credibilityTier, keyword, title, publishedAt) {
   const credCfg = config.sourceCredibility[credibilityTier] || config.sourceCredibility.unknown;
-  const { titleKeywordBonus, notifyScore } = config.relevance;
+  const { titleKeywordBonus } = config.relevance;
 
   // 来源可信度加权
   let score = aiScore * credCfg.weight;
@@ -47,6 +47,15 @@ function computeFinalScore(aiScore, credibilityTier, keyword, title) {
   // 关键词原词命中标题加分
   if (title && title.toLowerCase().includes(keyword.toLowerCase())) {
     score += titleKeywordBonus;
+  }
+
+  // 时间新颖度因子：有真实时间的文章按新旧程度加权
+  if (publishedAt) {
+    try {
+      const daysSince = (Date.now() - new Date(publishedAt).getTime()) / 86400000;
+      const freshness = Math.max(0.7, 1 - daysSince / 14); // 14天半衰，最低 0.7
+      score *= freshness;
+    } catch { /* 时间解析失败不扣分 */ }
   }
 
   // 上限 1.0
@@ -58,6 +67,67 @@ function logDecision(entry) {
   try {
     fs.appendFileSync(DECISION_LOG, JSON.stringify(entry) + '\n');
   } catch { /* 日志写入失败不影响主流程 */ }
+}
+
+/** 标题相似度去重：保留每组中来源可信度最高的那条，其余继承 AI 结果 */
+function deduplicateByTitle(items) {
+  if (items.length <= 1) return items;
+
+  const groups = []; // [{ keeper: item, duplicates: [item, ...] }]
+
+  for (const item of items) {
+    let matched = false;
+    for (const grp of groups) {
+      if (titleSimilarity(item.title, grp.keeper.title) > 0.8) {
+        grp.duplicates.push(item);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      groups.push({ keeper: item, duplicates: [] });
+    }
+  }
+
+  // 从每组选 keeper（来源可信度最高的），其余跳过 AI 调用
+  for (const grp of groups) {
+    if (grp.duplicates.length > 0) {
+      const all = [grp.keeper, ...grp.duplicates];
+      const bestIdx = all.reduce((best, curr, i, arr) => {
+        const bt = getCredibilityTier(curr.source, curr.url);
+        const ct = getCredibilityTier(arr[best].source, arr[best].url);
+        return (config.sourceCredibility[bt]?.tier || 5) < (config.sourceCredibility[ct]?.tier || 5) ? i : best;
+      }, 0);
+      // 将 keeper 换为来源最佳的那条
+      if (bestIdx !== 0) {
+        [grp.keeper, all[bestIdx]] = [all[bestIdx], grp.keeper];
+      }
+    }
+  }
+
+  const deduped = groups.map(g => g.keeper);
+  if (deduped.length < items.length) {
+    console.log(`[Scheduler] 标题去重: ${items.length} → ${deduped.length} 条 (减少 ${items.length - deduped.length} 次 AI 调用)`);
+  }
+  return deduped;
+}
+
+/** 简单标题相似度：基于 3-gram Jaccard */
+function titleSimilarity(a, b) {
+  if (!a || !b) return 0;
+  const norm = s => s.toLowerCase().replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '');
+  const sa = norm(a), sb = norm(b);
+  if (!sa || !sb) return 0;
+
+  const trigrams = s => {
+    const set = new Set();
+    for (let i = 0; i <= s.length - 3; i++) set.add(s.slice(i, i + 3));
+    return set;
+  };
+  const ta = trigrams(sa), tb = trigrams(sb);
+  const intersection = [...ta].filter(x => tb.has(x)).length;
+  const union = ta.size + tb.size - intersection;
+  return union === 0 ? 0 : intersection / union;
 }
 
 /**
@@ -129,13 +199,18 @@ async function runScan() {
 
       if (newItems.length === 0) continue;
 
+      // A1: 标题相似度去重，减少重复 AI 调用
+      const toVerify = config.queryExpansion.enabled
+        ? deduplicateByTitle(newItems)
+        : newItems;
+
       // 2. AI 验证 + 实时入库（完成一条入库一条，不等全部）
       const CONCURRENCY = 3;
       let kwNewCount = 0;
       const { minSaveScore, notifyScore } = config.relevance;
 
-      for (let i = 0; i < newItems.length; i += CONCURRENCY) {
-        const batch = newItems.slice(i, i + CONCURRENCY);
+      for (let i = 0; i < toVerify.length; i += CONCURRENCY) {
+        const batch = toVerify.slice(i, i + CONCURRENCY);
         const batchResults = await Promise.allSettled(
           batch.map(item => {
             const credibility = getCredibilityTier(item.source, item.url);
@@ -151,7 +226,7 @@ async function runScan() {
             : { isRelevant: true, isFake: false, score: 0.5, reason: 'AI验证失败，默认通过', contentSubject: '', matchMode: 'error' };
 
           const credibilityTier = getCredibilityTier(item.source, item.url);
-          const finalScore = computeFinalScore(aiResult.score, credibilityTier, kw.keyword, item.title);
+          const finalScore = computeFinalScore(aiResult.score, credibilityTier, kw.keyword, item.title, item.published_at);
 
           // 低于入库阈值 → 直接丢弃
           if (finalScore < minSaveScore) {
