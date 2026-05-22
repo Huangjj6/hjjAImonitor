@@ -12,7 +12,7 @@ export default function App() {
   const [keywords, setKeywords] = useState([]);
   const [notificationCount, setNotificationCount] = useState(0);
   const [scanning, setScanning] = useState(false);
-  const { connected, lastNotification, setLastNotification } = useWebSocket();
+  const { connected, lastNotification, setLastNotification, scanComplete } = useWebSocket();
   const { get, post, put, del, loading } = useApi();
 
   // 加载关键词
@@ -33,6 +33,14 @@ export default function App() {
       }
     }
   }, [lastNotification]);
+
+  // 监听扫描完成事件 → 恢复按钮状态（替代轮询，更可靠）
+  useEffect(() => {
+    if (scanComplete) {
+      console.log('[App] 扫描完成，恢复按钮状态');
+      setScanning(false);
+    }
+  }, [scanComplete]);
 
   const handleAddKeyword = async (keyword, category) => {
     const res = await post('/keywords', { keyword, category });
@@ -62,7 +70,7 @@ export default function App() {
 
   return (
     <AnimatedGridBackground>
-      <div className="h-screen flex flex-col bg-grid overflow-hidden">
+      <div className="h-screen flex flex-col bg-dark-950 bg-grid overflow-hidden">
         <Navbar
           activeTab={activeTab}
           setActiveTab={(tab) => {
@@ -73,7 +81,7 @@ export default function App() {
           notificationCount={notificationCount}
         />
 
-        <main className="flex-1 overflow-hidden max-w-6xl mx-auto w-full px-4 pt-16 pb-12">
+        <main className="flex-1 overflow-hidden max-w-6xl mx-auto w-full px-4 pt-16 pb-12 bg-dark-950">
           {activeTab === 'dashboard' && (
             <Dashboard
               notification={lastNotification}

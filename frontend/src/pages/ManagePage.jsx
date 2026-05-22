@@ -76,6 +76,13 @@ export default function ManagePage({
     };
   }, []);
 
+  // 当外部通过 WebSocket 将 scanning 置为 false 时，立即中止轮询
+  useEffect(() => {
+    if (!scanning && pollRef.current) {
+      pollRef.current.aborted = true;
+    }
+  }, [scanning]);
+
   const loadSettings = async () => {
     const res = await get('/settings');
     if (res.success) setSettings(res.data);
@@ -84,9 +91,14 @@ export default function ManagePage({
   const checkScanStatus = async () => {
     try {
       const res = await get('/settings/scheduler-status');
-      if (res?.success && res.data.isScanning) {
-        onScanningChange?.(true);
-        pollScanStatus();
+      if (res?.success) {
+        if (res.data.isScanning) {
+          onScanningChange?.(true);
+          pollScanStatus();
+        } else {
+          // 组件卸载期间扫描已结束 → 恢复按钮状态
+          onScanningChange?.(false);
+        }
       }
     } catch (e) { /* ignore */ }
   };

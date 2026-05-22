@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 export function useWebSocket() {
   const [connected, setConnected] = useState(false);
   const [lastNotification, setLastNotification] = useState(null);
+  const [scanComplete, setScanComplete] = useState(null);
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
   const mountedRef = useRef(true);
@@ -32,6 +33,9 @@ export function useWebSocket() {
           const msg = JSON.parse(event.data);
           if (msg.type === 'notification') {
             setLastNotification(msg.data);
+          } else if (msg.type === 'scan_complete') {
+            setScanComplete(msg.data);
+            console.log('[WS] 收到 scan_complete 事件');
           }
         } catch (e) { /* ignore */ }
       };
@@ -72,5 +76,5 @@ export function useWebSocket() {
     };
   }, [connect]);
 
-  return { connected, lastNotification, setLastNotification };
+  return { connected, lastNotification, setLastNotification, scanComplete };
 }

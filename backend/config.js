@@ -31,7 +31,7 @@ module.exports = {
     intervalMinutes: 10,       // 爬取间隔（分钟）
     maxResultsPerSource: 8,    // 每个源每次请求最大结果数
     requestDelay: 2000,        // 请求间延迟（ms）
-    maxAgeHours: 0,            // 0=不限时间范围，结果按发布时间倒序排列
+    maxAgeHours: 720,          // 默认保留 30 天内的结果，超旧内容直接过滤
     sources: ['web', 'twitter', 'bilibili', 'hackernews', 'gitee', 'reddit', 'oschina', 'github'],
     sourceMaxResults: {         // 按源限制最终入库上限（覆盖 maxResultsPerSource）
       '搜狗搜索': 3,            // 搜狗无发布时间，降低权重避免旧文章占太多

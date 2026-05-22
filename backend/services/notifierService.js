@@ -35,6 +35,25 @@ function notifyBrowser(data) {
   }
 }
 
+/**
+ * 发送扫描完成事件（用于前端恢复按钮状态）
+ */
+function notifyScanComplete(result) {
+  const message = JSON.stringify({
+    type: 'scan_complete',
+    data: result,
+    timestamp: new Date().toISOString(),
+  });
+
+  for (const ws of wsClients) {
+    if (ws.readyState === 1) {
+      ws.send(message);
+    }
+  }
+
+  console.log(`[Notify] 已推送 scan_complete 事件: ${JSON.stringify(result)}`);
+}
+
 // 邮件发送器（懒初始化）
 let mailTransporter = null;
 function getMailTransporter() {
@@ -127,4 +146,5 @@ module.exports = {
   notifyBrowser,
   sendEmail,
   sendNotification,
+  notifyScanComplete,
 };

@@ -550,8 +550,14 @@ async function crawlAllSources(keyword, category = 'general', keywordType = 'top
     return tb - ta;
   });
 
+  // 按时间过滤：超出 maxAgeHours 的旧内容直接丢弃
+  const aged = filterByAge(capped, config.crawler.maxAgeHours);
+  if (aged.length < capped.length) {
+    console.log(`[Crawler] 时间过滤: 排除 ${capped.length - aged.length} 条过期内容`);
+  }
+
   await sleep(config.crawler.requestDelay);
-  return capped;
+  return aged;
 }
 
 /**

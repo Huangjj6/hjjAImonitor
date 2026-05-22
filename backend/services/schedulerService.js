@@ -4,7 +4,7 @@ const path = require('path');
 const db = require('../models/database');
 const { crawlAllSources } = require('./crawlerService');
 const { verifyHotspot, classifyKeyword, expandQuery } = require('./aiService');
-const { sendNotification } = require('./notifierService');
+const { sendNotification, notifyScanComplete } = require('./notifierService');
 const config = require('../config');
 
 let cronJob = null;
@@ -49,14 +49,18 @@ function computeFinalScore(aiScore, credibilityTier, keyword, title, publishedAt
     score += titleKeywordBonus;
   }
 
-  // 时间新颖度因子：有真实时间的文章按新旧程度加权
+  // 时间新颖度因子：按新旧程度加权，越旧分数越低
+  let daysSince = null;
   if (publishedAt) {
     try {
-      const daysSince = (Date.now() - new Date(publishedAt).getTime()) / 86400000;
-      const freshness = Math.max(0.7, 1 - daysSince / 14); // 14天半衰，最低 0.7
-      score *= freshness;
-    } catch { /* 时间解析失败不扣分 */ }
+      daysSince = (Date.now() - new Date(publishedAt).getTime()) / 86400000;
+    } catch { /* 忽略解析失败 */ }
   }
+  // 无时间戳的来源（如 DuckDuckGo/搜狗）视为 14 天前，给予中等新鲜度惩罚
+  if (daysSince === null) daysSince = 14;
+  // 7 天半衰期，最低 0.5 倍，14 天后降到 0.5
+  const freshness = Math.max(0.5, 1 - daysSince / 14);
+  score *= freshness;
 
   // 上限 1.0
   return Math.min(1, Math.round(score * 100) / 100);
@@ -191,6 +195,8 @@ async function runScan() {
   } finally {
     isScanning = false;
     scanStartTime = null;
+    // 推送扫描完成事件，前端通过 WebSocket 接收后恢复按钮状态
+    notifyScanComplete(lastScanResult);
   }
 }
 
