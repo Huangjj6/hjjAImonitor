@@ -1,6 +1,6 @@
 # Hot Monitor 技术方案
 
-> 版本：v1.2 | 日期：2026-05-21
+> 版本：v1.3 | 日期：2026-05-22
 
 ---
 
@@ -212,9 +212,10 @@ Base URL: `http://localhost:3001/api`
 ```
 
 **AI Prompt 设计：**
-- System：严格的信息相关性审核助手，只返回 JSON
+- System：严格的信息相关性审核助手，先逐步推理分析再输出 JSON
 - User：传入关键词 + 来源（含可信度标签）+ 标题 + 摘要
-- 要求返回 JSON：`{contentSubject, matchMode, isRelevant, isFake, score, confidence, sentiment, entities, reason}`
+- 要求先输出 6 步推理链（提取主题→对比关键词→判断可信度→情感分析→确信度→提取实体），再输出 JSON
+- JSON 新增 `narration` 字段：一段 80 字内的自然语言总结，替代后端字段拼接
 
 **评分标准（4 档）：**
 | 分数区间 | 含义 |
@@ -236,14 +237,15 @@ Base URL: `http://localhost:3001/api`
 | `confidence` | 0-1 | AI 自身确信度 |
 | `sentiment` | enum | `positive / negative / neutral` — 对关键词的情感倾向 |
 | `entities` | string[] | 文中提及的其他关键实体 |
+| `narration` | string | 自然语言总结，结合内容与相关性判断（80字内） |
 | `reason` | string | 判断理由（60字内） |
 
 **综合评分公式：**
 ```
-最终分 = AI原始分 × 来源可信度权重 + 标题命中加分(0.15) × 时间新颖度因子
+最终分 = (AI原始分 × 来源可信度权重 + 标题命中加分(0.15)) × 时间新颖度因子
 ```
-- 来源可信度：T1=1.0, T2=0.95, T3=0.90, T4=0.85, T5=0.80
-- 时间新颖度：14 天半衰期，最低 0.7 倍
+- 来源可信度：T1=0.98, T2=0.96, T3=0.94, T4=0.92, T5=0.90（权重低差异，AI 评分主导）
+- 时间新颖度：10 天半衰期，最低 0.5 倍；无时间戳默认视为 3 天前
 
 **多层预过滤优化（P0）：**
 4 层递进匹配，提高命中率同时避免无效 AI 调用：
@@ -252,6 +254,7 @@ Base URL: `http://localhost:3001/api`
 |------|------|------|------|
 | L1 | 精确子串 | 原始关键词直接匹配 | "GPT-5" → 标题含"GPT-5" |
 | L2 | 分词匹配 | 按标点空格分词后匹配 | "GPT-5" → 标题含"GPT"和"5" |
+| L2b | 中文截断 | 中文复合词去尾 1~2 字 | "智能体开发" → 试"智能体"、"智能开发" |
 | L3 | 规范化匹配 | 去掉标点空格后匹配 | "GPT-5" → 标题含"GPT5" |
 | L4 | 同义映射 | 同义词/缩写/变体表匹配 | "AI" → 标题含"人工智能" |
 
@@ -271,12 +274,12 @@ Base URL: `http://localhost:3001/api`
 
 | 信息源 | 端点 | 方式 | 需要 Key | 降级策略 |
 |--------|------|------|:--------:|----------|
-| DuckDuckGo | `html.duckduckgo.com/html/` | HTML 解析 | ❌ | — |
-| Bing News | `bing.com/search` | HTML 解析 | ❌ | — |
+| DuckDuckGo | `html.duckduckgo.com/html/` | HTML 解析 | ❌ | 提取 `.result__timestamp` 获得发布时间 |
+| Bing News | `bing.com/search` | HTML 解析 | ❌ | 提取 `.b_secondaryText` 获得发布时间 |
 | Google News | `news.google.com/rss` | RSS 解析 | ❌ | — |
 | 搜狗搜索 | `sogou.com/web` | HTML 解析 | ❌ | 多选择器兜底 |
 | Twitter/X | `api.twitterapi.io/twitter/tweet/advanced_search` | REST API | ✅ | Key 未配置时静默跳过 |
-| Bilibili | `api.bilibili.com/x/web-interface/search/type` | REST API | ❌ | API 失败 → HTML 降级 |
+| Bilibili | `api.bilibili.com/x/web-interface/search/type` | REST API | ❌ | 直接调用官方 API，失败概率 <1% |
 | HackerNews | `hn.algolia.com/api/v1/search` | REST API | ❌ | — |
 | Gitee | `gitee.com/api/v5/search/repositories` | REST API | ❌ | — |
 | Reddit | `reddit.com/search.json` | JSON feed | ❌ | — |
@@ -302,9 +305,7 @@ sources: ['web', 'twitter', 'bilibili', 'hackernews', 'gitee', 'reddit', 'oschin
 `config.crawler.sourceMaxResults` 可对特定来源设置入库上限：
 
 ```js
-sourceMaxResults: {
-  '搜狗搜索': 3,   // 搜狗无发布时间，降低权重避免旧文章占太多
-}
+sourceMaxResults: {},  // 已移除搜狗特殊限制，各源统一使用 maxResultsPerSource
 ```
 
 ### 7.4 策略
@@ -385,9 +386,9 @@ sourceMaxResults: {
 | 爬取间隔 | `crawler_interval` (DB 设置) | 10 分钟 |
 | 启用的信息源 | `config.crawler.sources` | `['web','twitter','bilibili','hackernews','gitee','reddit','oschina','github']` |
 | 每源最大结果 | `config.crawler.maxResultsPerSource` | 8 |
-| 源级上限 | `config.crawler.sourceMaxResults` | `{ '搜狗搜索': 3 }` |
+| 源级上限 | `config.crawler.sourceMaxResults` | `{}`（已移除搜狗限制） |
 | 请求间延迟 | `config.crawler.requestDelay` | 2000ms |
-| 最大保留时间 | `config.crawler.maxAgeHours` | 0（不限） |
+| 最大保留时间 | `config.crawler.maxAgeHours` | 0（不限，由新鲜度因子控制） |
 | 入库最低分 | `config.relevance.minSaveScore` | 0.4 |
 | 通知触发分 | `config.relevance.notifyScore` | 0.6 |
 | 预过滤开关 | `config.preFilter.enabled` | `true` |
