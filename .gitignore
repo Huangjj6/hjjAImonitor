@@ -6,3 +6,5 @@ dist/
 *.db-wal
 
 .vite/
+*.jsonl
+backend/tests/backups/
