@@ -22,6 +22,7 @@ const EXPANSION_TTL = 60 * 60 * 1000;
 // AI 决策日志路径（用于评估）
 const DECISION_LOG = path.join(__dirname, '..', 'tests', 'ai_decisions.jsonl');
 
+/** AI 情感标签转中文 */
 /** 根据 URL/来源名确定可信度层级 */
 function getCredibilityTier(source, url) {
   const host = (() => {
@@ -56,10 +57,10 @@ function computeFinalScore(aiScore, credibilityTier, keyword, title, publishedAt
       daysSince = (Date.now() - new Date(publishedAt).getTime()) / 86400000;
     } catch { /* 忽略解析失败 */ }
   }
-  // 无时间戳的来源（如 DuckDuckGo/搜狗）视为 14 天前，给予中等新鲜度惩罚
-  if (daysSince === null) daysSince = 14;
-  // 7 天半衰期，最低 0.5 倍，14 天后降到 0.5
-  const freshness = Math.max(0.5, 1 - daysSince / 14);
+  // 无时间戳的来源视为 3 天前，轻度新鲜度惩罚
+  if (daysSince === null) daysSince = 3;
+  // 10 天半衰期，最低 0.5 倍
+  const freshness = Math.max(0.5, 1 - daysSince / 10);
   score *= freshness;
 
   // 上限 1.0
@@ -262,21 +263,6 @@ async function scanKeyword(kw) {
       const credibilityTier = getCredibilityTier(item.source, item.url);
       const finalScore = computeFinalScore(aiResult.score, credibilityTier, kw.keyword, item.title, item.published_at);
 
-      if (finalScore < minSaveScore) {
-        logDecision({
-          ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
-          source: item.source, credibilityTier,
-          aiScore: aiResult.score, finalScore,
-          contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
-          isRelevant: aiResult.isRelevant, isFake: aiResult.isFake,
-          confidence: aiResult.confidence, sentiment: aiResult.sentiment, entities: aiResult.entities,
-          saved: false, action: 'low_score',
-          reviewed: false,
-        });
-        console.log(`[Scheduler] ⏭️ 低分跳过(${finalScore}): "${item.title.substring(0, 50)}"`);
-        continue;
-      }
-
       if (aiResult.isFake) {
         db.addHotspot({
           keyword_id: kw.id,
@@ -285,7 +271,9 @@ async function scanKeyword(kw) {
           source: item.source,
           summary: item.summary,
           ai_score: finalScore,
-          ai_reason: aiResult.reason,
+          ai_reason: (aiResult.narration || aiResult.reason) 
+            ? `⚠️ 判定为虚假/蹭热度。${aiResult.narration || aiResult.reason}` 
+            : '⚠️ 判定为虚假/蹭热度内容。',
           is_verified: 1,
           is_fake: 1,
           published_at: item.published_at,
@@ -305,6 +293,20 @@ async function scanKeyword(kw) {
         continue;
       }
 
+      if (finalScore < minSaveScore) {
+        logDecision({
+          ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
+          source: item.source, credibilityTier,
+          aiScore: aiResult.score, finalScore,
+          contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
+          isRelevant: aiResult.isRelevant, isFake: aiResult.isFake,
+          confidence: aiResult.confidence, sentiment: aiResult.sentiment, entities: aiResult.entities,
+          saved: false, action: 'low_score',
+          reviewed: false,
+        });
+        console.log(`[Scheduler] ⏭️ 低分跳过(${finalScore}): "${item.title.substring(0, 50)}"`);
+        continue;
+      }
       if (!aiResult.isRelevant) {
         logDecision({
           ts: new Date().toISOString(), keyword: kw.keyword, title: item.title.substring(0, 80),
@@ -327,7 +329,7 @@ async function scanKeyword(kw) {
         source: item.source,
         summary: item.summary,
         ai_score: finalScore,
-        ai_reason: `${aiResult.reason} | 主题:${aiResult.contentSubject} | 情感:${aiResult.sentiment} | 确信:${aiResult.confidence}`,
+        ai_reason: aiResult.narration || aiResult.reason,
         is_verified: 1,
         is_fake: 0,
         published_at: item.published_at,

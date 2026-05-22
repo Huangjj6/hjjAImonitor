@@ -25,6 +25,15 @@ function timeAgo(dateStr) {
   } catch { return ''; }
 }
 
+function formatPubDate(dateStr) {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr.replace(' ', 'T') + (dateStr.includes('+') ? '' : 'Z'));
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  } catch { return dateStr; }
+}
+
 function HotspotCard({ h, onMarkFake, isLatest }) {
   const [expanded, setExpanded] = useState(false);
   const isFake = h.is_fake;
@@ -103,14 +112,27 @@ function HotspotCard({ h, onMarkFake, isLatest }) {
             {h.summary && (
               <p className="text-white/30 leading-relaxed">{h.summary.slice(0, 120)}</p>
             )}
+            {/* 时间元信息 */}
+            <div className="flex flex-wrap items-center gap-2 text-[10px] text-white/20 font-mono">
+              {h.published_at && !isNaN(new Date(h.published_at).getTime()) && (
+                <span className="inline-flex items-center gap-0.5">
+                  📅 {formatPubDate(h.published_at)}
+                </span>
+              )}
+              {h.keyword_text && (
+                <span className="inline-flex items-center gap-0.5">
+                  🏷️ {h.keyword_text}
+                </span>
+              )}
+            </div>
             {h.ai_reason && (
               <div className={cn(
-                'px-2 py-1 rounded-lg leading-relaxed border',
+                'px-2 py-1.5 rounded-lg leading-relaxed border text-[11px]',
                 isFake
                   ? 'bg-rose-500/5 text-rose-400/60 border-rose-500/10'
-                  : 'bg-emerald-500/5 text-emerald-400/50 border-emerald-500/10'
+                  : 'bg-indigo-500/5 text-indigo-400/60 border-indigo-500/10'
               )}>
-                {h.ai_reason.slice(0, 80)}
+                {h.ai_reason}
               </div>
             )}
           </div>
@@ -286,7 +308,8 @@ export default function HotspotTimeline({ hotspots = [], loading, onMarkFake }) 
     <div className="animate-fade-in flex flex-col h-full">
       {/* ====== 筛选栏 ====== */}
       <div className="flex-shrink-0 mb-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] p-1">
-        <div className="flex items-center gap-1 flex-wrap">\n          {/* 状态 tabs */}
+        <div className="flex items-center gap-1 flex-wrap">
+          {/* 状态 tabs */}
           {statusTabs.map(f => (
             <button
               key={f.id}

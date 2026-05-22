@@ -56,6 +56,8 @@ async function searchWeb(keyword) {
       const title = titleEl.text().trim();
       const snippetEl = $(el).find('.result__snippet');
       const summary = snippetEl.text().trim();
+      // DuckDuckGo 在结果中有 result__timestamp 元素显示相对时间
+      const dateText = $(el).find('.result__timestamp').text().trim();
 
       let link = titleEl.attr('href') || '';
       if (link.startsWith('/l/?uddg=')) {
@@ -70,7 +72,7 @@ async function searchWeb(keyword) {
           url: cleanUrl,
           source: 'DuckDuckGo',
           summary: cleanHtml(summary).substring(0, 300),
-          published_at: null, // HTML 搜索结果无真实时间戳
+          published_at: extractRelativeDate(dateText),
         });
       }
     });
@@ -158,6 +160,8 @@ async function searchBingNews(keyword) {
       const link = titleEl.attr('href') || '';
       const summaryEl = $(el).find('.b_caption p, .b_lineclamp2');
       const summary = summaryEl.text().trim();
+      // Bing 在 attribution 中显示日期
+      const dateText = $(el).find('.b_attribution .b_secondaryText, .b_secondaryText').text().trim();
 
       if (title && link && link.startsWith('http')) {
         results.push({
@@ -165,7 +169,7 @@ async function searchBingNews(keyword) {
           url: link,
           source: 'Bing News',
           summary: cleanHtml(summary).substring(0, 300),
-          published_at: null,
+          published_at: extractRelativeDate(dateText),
         });
       }
     });
@@ -216,7 +220,7 @@ async function searchSogou(keyword) {
             url: cleanUrl,
             source: '搜狗搜索',
             summary: '',
-            published_at: null,
+            published_at: extractDateFromSogou(title + ' ' + link),
           });
         }
       });
@@ -235,12 +239,16 @@ async function searchSogou(keyword) {
       if (title && link && !link.startsWith('javascript')) {
         const cleanUrl = normalizeUrl(link, '搜狗搜索');
         if (!cleanUrl) return;
+        // 从摘要或日期元素中提取发布时间
+        const dateText = $(el).find('.str-text, .fb-hint, .space-txt, .star-wiki').text().trim()
+                      || summary;
+        const pubDate = extractDateFromSogou(dateText);
         results.push({
           title: cleanHtml(title),
           url: cleanUrl,
           source: '搜狗搜索',
           summary: cleanHtml(summary).substring(0, 300),
-          published_at: null,
+          published_at: pubDate,
         });
       }
     });
@@ -278,8 +286,7 @@ async function searchBilibili(keyword) {
     const data = response.data;
     if (data.code !== 0) {
       console.warn(`[Crawler] Bilibili API error: code=${data.code}, msg=${data.message}`);
-      // API 失败 → 尝试 HTML 降级
-      return searchBilibiliHtml(keyword);
+      return results;
     }
 
     const videos = (data.data && data.data.result) || [];
@@ -297,60 +304,6 @@ async function searchBilibili(keyword) {
     console.log(`[Crawler] Bilibili for "${keyword}" => ${results.length} results`);
   } catch (err) {
     console.error(`[Crawler] Bilibili error for "${keyword}":`, err.message);
-    // 请求失败 → 尝试 HTML 降级
-    const htmlResults = await searchBilibiliHtml(keyword);
-    results.push(...htmlResults);
-  }
-
-  return results;
-}
-
-/**
- * Bilibili HTML 搜索降级（当 API 不可用时直接爬搜索页）
- */
-async function searchBilibiliHtml(keyword) {
-  const results = [];
-  const query = encodeURIComponent(keyword);
-  const url = `https://search.bilibili.com/all?keyword=${query}&order=pubdate`;
-
-  try {
-    const response = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://www.bilibili.com',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'Cookie': 'buvid3=local; b_nut=1700000000; _uuid=local',
-      },
-      timeout: 15000,
-    });
-
-    const $ = cheerio.load(response.data);
-    const items = $('.video-list .bili-video-card, .bili-video-list .video-item, .search-content .video-list-item');
-
-    items.each((i, el) => {
-      if (i >= 3) return false;
-
-      const titleEl = $(el).find('.bili-video-card__info__tit, .video-title a, .info .title a');
-      const title = titleEl.text().trim();
-      const link = titleEl.attr('href') || '';
-      const href = link.startsWith('http') ? link : `https:${link}`;
-      const desc = $(el).find('.bili-video-card__info__author, .up-name, .des').text().trim();
-
-      if (title && href) {
-        results.push({
-          title: cleanHtml(title).substring(0, 120),
-          url: href,
-          source: 'Bilibili',
-          summary: cleanHtml(desc).substring(0, 300),
-          published_at: new Date().toISOString(),
-        });
-      }
-    });
-
-    console.log(`[Crawler] Bilibili HTML "${keyword}" => ${results.length} results`);
-  } catch (err) {
-    console.error(`[Crawler] Bilibili HTML error:`, err.message);
   }
 
   return results;
@@ -612,6 +565,54 @@ function cleanHtml(html) {
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** 从搜狗搜索结果文本中解析日期 */
+function extractDateFromSogou(text) {
+  if (!text) return null;
+  // 匹配 "2025-03-15" 或 "2025年3月15日" 格式
+  const isoMatch = text.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const d = new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2]) - 1, parseInt(isoMatch[3]));
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  const cnMatch = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if (cnMatch) {
+    const d = new Date(parseInt(cnMatch[1]), parseInt(cnMatch[2]) - 1, parseInt(cnMatch[3]));
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  // 匹配 "3天前"、"5分钟前" 等相对时间
+  const daysAgo = text.match(/(\d+)\s*天前/);
+  if (daysAgo) {
+    return new Date(Date.now() - parseInt(daysAgo[1]) * 86400000).toISOString();
+  }
+  const hoursAgo = text.match(/(\d+)\s*小时前/);
+  if (hoursAgo) {
+    return new Date(Date.now() - parseInt(hoursAgo[1]) * 3600000).toISOString();
+  }
+  return null;
+}
+
+/** 从英文搜索结果文本中解析相对/绝对日期（DuckDuckGo/Bing） */
+function extractRelativeDate(text) {
+  if (!text) return null;
+  const lower = text.toLowerCase().trim();
+  // "5 hours ago", "3 days ago", "2 minutes ago"
+  const relMatch = lower.match(/(\d+)\s*(minute|hour|day|week|month|year)s?\s+ago/);
+  if (relMatch) {
+    const num = parseInt(relMatch[1]);
+    const unit = relMatch[2];
+    const multipliers = { minute: 60000, hour: 3600000, day: 86400000, week: 604800000, month: 2592000000, year: 31536000000 };
+    const ms = (multipliers[unit] || 0) * num;
+    return new Date(Date.now() - ms).toISOString();
+  }
+  // "Apr 15, 2025" 或 "15 Apr 2025" 格式
+  const absMatch = text.match(/(\w{3,9})\s+(\d{1,2}),?\s*(\d{4})/);
+  if (absMatch) {
+    const d = new Date(`${absMatch[1]} ${absMatch[2]}, ${absMatch[3]}`);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  return null;
 }
 
 function sleep(ms) {

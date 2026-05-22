@@ -31,11 +31,9 @@ module.exports = {
     intervalMinutes: 10,       // 爬取间隔（分钟）
     maxResultsPerSource: 8,    // 每个源每次请求最大结果数
     requestDelay: 2000,        // 请求间延迟（ms）
-    maxAgeHours: 720,          // 默认保留 30 天内的结果，超旧内容直接过滤
+    maxAgeHours: 0,            // 0=不限时间范围，由新鲜度因子直接控制旧内容评分
     sources: ['web', 'twitter', 'bilibili', 'hackernews', 'gitee', 'reddit', 'oschina', 'github'],
-    sourceMaxResults: {         // 按源限制最终入库上限（覆盖 maxResultsPerSource）
-      '搜狗搜索': 3,            // 搜狗无发布时间，降低权重避免旧文章占太多
-    },
+    sourceMaxResults: {},       // 按源限制最终入库上限（覆盖 maxResultsPerSource）
     excludeDomains: [            // 百科类域名，URL 匹配即过滤
       'baike.baidu.com',
       'baike.sogou.com',
@@ -77,10 +75,10 @@ module.exports = {
 
   // 来源可信度加权（Tier 1 最高）
   sourceCredibility: {
-    official:  { tier: 1, weight: 1.00, label: '官方媒体', domains: ['gov.cn', 'xinhuanet.com', 'people.com.cn', 'cctv.com', 'bbc.com', 'reuters.com', 'ap.org', 'bloomberg.com'] },
-    media:     { tier: 2, weight: 0.95, label: '知名媒体', domains: ['36kr.com', 'ifeng.com', 'sina.com.cn', 'qq.com', 'sohu.com', 'thepaper.cn', 'ft.com', 'wsj.com', 'techcrunch.com', 'theverge.com', 'wired.com'] },
-    blog:      { tier: 3, weight: 0.90, label: '知名博客', domains: ['zhihu.com', 'juejin.cn', 'csdn.net', 'cnblogs.com', 'medium.com', 'weixin.qq.com', 'mp.weixin.qq.com', 'segmentfault.com', 'v2ex.com', 'github.com'] },
-    social:    { tier: 4, weight: 0.85, label: '社交媒体', domains: ['bilibili.com', 'weibo.com', 'twitter.com', 'x.com', 'douyin.com', 'reddit.com', 'tieba.baidu.com', 'xiaohongshu.com'] },
-    unknown:   { tier: 5, weight: 0.80, label: '未知来源' },
+    official:  { tier: 1, weight: 0.98, label: '官方媒体', domains: ['gov.cn', 'xinhuanet.com', 'people.com.cn', 'cctv.com', 'bbc.com', 'reuters.com', 'ap.org', 'bloomberg.com'] },
+    media:     { tier: 2, weight: 0.96, label: '知名媒体', domains: ['36kr.com', 'ifeng.com', 'sina.com.cn', 'qq.com', 'sohu.com', 'thepaper.cn', 'ft.com', 'wsj.com', 'techcrunch.com', 'theverge.com', 'wired.com'] },
+    blog:      { tier: 3, weight: 0.94, label: '知名博客', domains: ['zhihu.com', 'juejin.cn', 'csdn.net', 'cnblogs.com', 'medium.com', 'weixin.qq.com', 'mp.weixin.qq.com', 'segmentfault.com', 'v2ex.com', 'github.com'] },
+    social:    { tier: 4, weight: 0.92, label: '社交媒体', domains: ['bilibili.com', 'weibo.com', 'twitter.com', 'x.com', 'douyin.com', 'reddit.com', 'tieba.baidu.com', 'xiaohongshu.com'] },
+    unknown:   { tier: 5, weight: 0.90, label: '未知来源' },
   },
 };

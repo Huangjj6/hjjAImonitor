@@ -16,6 +16,12 @@ const SYNONYM_MAP = {
   'gpt5': ['gpt-5', 'gpt 5'],
   'deepseek': ['深度求索', 'deep seek'],
   '深度求索': ['deepseek', 'deep seek'],
+  '智能体': ['ai agent', 'agent', 'AI Agent', '自主智能体', '智能代理', 'agentic'],
+  'ai agent': ['智能体', 'agent', '自主智能体', '智能代理'],
+  'agent': ['智能体', 'ai agent', '自主智能体', '智能代理', 'agentic'],
+  'vibe coding': ['vibe', 'vibecoding', 'vibe-coding', 'cursor ai', 'cursor', 'windsurf', 'bolt.new', 'lovable', 'ai coding', 'ai programming'],
+  'vibe': ['vibe coding', 'vibecoding', 'vibe-coding'],
+  'cursor': ['cursor ai', 'cursor ide', 'vibe coding', 'ai coding assistant'],
 
   // 编程语言 / 框架
   'js': ['javascript', 'node.js', 'nodejs', 'node', 'ecmascript'],
@@ -100,6 +106,17 @@ function preFilterKeyword(keyword, title, summary) {
     }
   }
 
+  // Layer 2b: 中文关键词渐进截断匹配
+  // 对于"智能体开发"这种无分隔符的中文复合词，尝试去掉末尾1~2字再匹配
+  if (tokens.length <= 1 && /[\u4e00-\u9fff]/.test(kw)) {
+    for (let trimLen = 1; trimLen <= Math.min(2, kw.length - 1); trimLen++) {
+      const subKw = kw.slice(0, kw.length - trimLen);
+      if (subKw.length >= 2 && (ti.includes(subKw) || su.includes(subKw))) {
+        return { matched: true, matchLayer: 'token' };
+      }
+    }
+  }
+
   // Layer 3: 标准化匹配 — 去掉标点和空格后比较
   const normalize = s => s.replace(/[\s\-_.:·・、，。！？（）()\[\]【】「」{}'"：；]/g, '');
   const kwNorm = normalize(kw);
@@ -111,15 +128,40 @@ function preFilterKeyword(keyword, title, summary) {
     }
   }
 
-  // Layer 4: 同义/缩写映射匹配
+  // Layer 4: 同义/缩写映射匹配 + 中文同义关键词内部渐进匹配
   const synonyms = getKeywordSynonyms(kw);
   for (const syn of synonyms) {
     if (syn.length >= 2 && (ti.includes(syn) || su.includes(syn))) {
       return { matched: true, matchLayer: 'synonym' };
     }
   }
+  // 同义词也做渐进截断匹配（如 "智能体开发" → synonyms里配到"智能体"）
+  if (/[\u4e00-\u9fff]/.test(kw)) {
+    for (const syn of synonyms) {
+      for (let trimLen = 1; trimLen <= Math.min(2, syn.length - 1); trimLen++) {
+        const subSyn = syn.slice(0, syn.length - trimLen);
+        if (subSyn.length >= 2 && (ti.includes(subSyn) || su.includes(subSyn))) {
+          return { matched: true, matchLayer: 'synonym' };
+        }
+      }
+    }
+  }
 
   return { matched: false, matchLayer: 'all_missed' };
+}
+
+/** AI 未返回 narration 时的兜底生成 */
+function buildFallbackNarration(aiResult, title) {
+  const matchLab = {
+    exact_match: '核心讨论',
+    partial_match: '部分提及',
+    tangential: '间接关联',
+    unrelated: '不相关',
+  };
+  const m = matchLab[aiResult.matchMode] || '未知';
+  const subj = aiResult.contentSubject ? `涉及"${aiResult.contentSubject}"` : '';
+  const t = title ? title.slice(0, 60) : '未知内容';
+  return `内容"${t}"，${m}监控关键词${subj ? `，${subj}` : ''}。`;
 }
 
 /**
@@ -134,7 +176,7 @@ function preFilterKeyword(keyword, title, summary) {
 async function verifyHotspot(keyword, title, summary, source, credibilityTier = 'unknown') {
   if (!config.openrouter.apiKey) {
     console.warn('[AI] OpenRouter API key not configured, skipping AI verification');
-    return { isRelevant: true, isFake: false, score: 0.5, reason: 'AI未配置，默认通过', contentSubject: '', matchMode: 'unknown', confidence: 0, sentiment: 'neutral', entities: [] };
+    return { isRelevant: true, isFake: false, score: 0.5, reason: 'AI未配置，默认通过', narration: `AI未配置，标题"${title.slice(0, 60)}"默认通过审核。`, contentSubject: '', matchMode: 'unknown', confidence: 0, entities: [] };
   }
 
   // 多层预过滤：判断关键词是否可能出现在内容中，避免无效 AI 调用
@@ -146,9 +188,10 @@ async function verifyHotspot(keyword, title, summary, source, credibilityTier = 
         isRelevant: false, isFake: false,
         score: config.preFilter.scoreOnMiss,
         reason: `预过滤(${pf.matchLayer})：关键词未出现在标题/摘要中`,
+        narration: `标题与摘要中未发现关键词"${keyword}"的匹配，判定为不相关内容。`,
         contentSubject: '', matchMode: 'unrelated',
         confidence: config.preFilter.confidenceOnMiss,
-        sentiment: 'neutral', entities: [],
+        entities: [],
       };
     }
     if (pf.matchLayer !== 'exact') {
@@ -171,21 +214,39 @@ async function verifyHotspot(keyword, title, summary, source, credibilityTier = 
 0.5-0.7=直接相关（关键词是讨论对象之一）
 0.7-1.0=高度相关（核心主题+来源权威）
 
-判断流程:
-1. 提取内容真实主题(contentSubject)
-2. 对比关键词与主题的交集程度
-3. 标题党/广告/蹭热度 → isFake=true
-4. 评估AI自身确信度(confidence)
-5. 判断对关键词的情感倾向(sentiment)
-6. 提取其他相关实体(entities)
+请按以下步骤逐一推理分析:
 
-示例:
-- "OpenAI CEO当选年度人物" → exact_match, 0.85
-- "前端2025趋势: React vs Vue" → partial_match, 0.6
-- "区块链在教育领域的应用"（末段提比特币）→ tangential, 0.25
+第一步：提取真实主题
+- 这条内容实际在讲什么？
+- 它属于什么领域/话题？
 
-返回JSON（不要markdown包裹）:
+第二步：对比关键词与主题
+- 关键词是内容的讨论核心，还是只是顺带提及？
+- 属于哪种匹配模式？（exact_match/partial_match/tangential/unrelated）
+
+第三步：判断可信度
+- 标题是否有标题党/夸大/诱导点击的嫌疑？
+- 内容是否为广告软文、蹭热度、或虚假信息？
+
+第四步：情感分析
+- 内容对关键词的情感倾向是正面/负面/中立？
+
+第五步：确信度评估
+- 你对以上判断有多大把握？考虑信息完整性、来源可信度等因素
+
+第六步：提取关联实体
+- 文中还提到了哪些与关键词相关的关键实体？
+
+=====
+
+先输出推理过程，然后在最后输出JSON。
+
+推理：
+<你的逐步分析>
+
+JSON：
 {
+  "narration": "一段80字内的自然语言总结：用一句话概括这篇内容讲什么，然后说明它与监控关键词的相关程度。例如：'这是一篇关于OpenAI发布GPT-5的报道，关键词GPT-5是文章核心讨论对象，内容来自TechCrunch可信度较高'",
   "contentSubject": "内容的实际主题(20字内)",
   "matchMode": "exact_match|partial_match|tangential|unrelated",
   "isRelevant": true/false,
@@ -203,11 +264,11 @@ async function verifyHotspot(keyword, title, summary, source, credibilityTier = 
       {
         model: config.openrouter.model,
         messages: [
-          { role: 'system', content: '你是严格的信息相关性审核助手。只返回JSON，不要加```json```或其他格式。必须严格按评分标准打分。' },
+          { role: 'system', content: '你是严格的信息相关性审核助手。先逐步推理分析，再输出JSON。推理过程放在"推理："之后，JSON放在"JSON："之后。必须严格按评分标准打分。' },
           { role: 'user', content: prompt },
         ],
-        temperature: 0.05,
-        max_tokens: 400,
+        temperature: 0.1,
+        max_tokens: 600,
       },
       {
         headers: {
@@ -232,18 +293,23 @@ async function verifyHotspot(keyword, title, summary, source, credibilityTier = 
     result.contentSubject = result.contentSubject || '';
     result.matchMode = result.matchMode || 'unknown';
     result.reason = result.reason || '';
+    result.narration = result.narration || buildFallbackNarration(result, title);
     result.confidence = Math.max(0, Math.min(1, parseFloat(result.confidence) || 0));
-    result.sentiment = ['positive', 'negative', 'neutral'].includes(result.sentiment) ? result.sentiment : 'neutral';
     result.entities = Array.isArray(result.entities) ? result.entities.slice(0, 5) : [];
 
-    console.log(`[AI] "${title.substring(0, 40)}" => ${result.matchMode} | s:${result.score} | c:${result.confidence} | ${result.sentiment} | subj:"${result.contentSubject}"`);
+    console.log(`[AI] "${title.substring(0, 40)}" => ${result.matchMode} | s:${result.score} | c:${result.confidence} | subj:"${result.contentSubject}"`);
     return result;
   } catch (err) {
-    const detail = err.response?.status
-      ? `HTTP ${err.response.status}: ${JSON.stringify(err.response.data).substring(0, 200)}`
+    const status = err.response?.status;
+    const detail = status
+      ? `HTTP ${status}: ${JSON.stringify(err.response.data).substring(0, 200)}`
       : err.message;
     console.error(`[AI] Verification error:`, detail);
-    return { isRelevant: true, isFake: false, score: 0.5, reason: 'AI验证异常，默认通过', contentSubject: '', matchMode: 'error', confidence: 0, sentiment: 'neutral', entities: [] };
+    const errMsg = status === 402 ? 'OpenRouter余额不足'
+      : status === 429 ? 'API请求频率过高'
+      : status === 401 || status === 403 ? 'API Key无效'
+      : `AI验证异常(HTTP ${status || '?'})`;
+    return { isRelevant: true, isFake: false, score: 0.5, reason: errMsg, narration: `${errMsg}，标题"${title.slice(0, 60)}"默认通过。`, contentSubject: '', matchMode: 'error', confidence: 0, entities: [] };
   }
 }
 
