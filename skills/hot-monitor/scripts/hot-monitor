@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Hot Monitor — 零依赖热点采集 CLI
+用法: python hot-monitor <command> [options]
+      ./hot-monitor <command> [options]    (Unix chmod +x)
+"""
+
+import sys
+import os
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LIB_DIR = os.path.join(SCRIPT_DIR, 'lib')
+sys.path.insert(0, LIB_DIR)
+
+from cli import main
+
+if __name__ == '__main__':
+    main()
+

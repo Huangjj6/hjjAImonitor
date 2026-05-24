@@ -1,0 +1,1 @@
+# Hot Monitor lib package
