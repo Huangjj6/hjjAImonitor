@@ -70,7 +70,7 @@ export default function App() {
 
   return (
     <AnimatedGridBackground>
-      <div className="h-screen flex flex-col bg-dark-950 bg-grid overflow-hidden">
+      <div className="h-screen flex flex-col bg-grid overflow-hidden">
         <Navbar
           activeTab={activeTab}
           setActiveTab={(tab) => {
@@ -81,7 +81,7 @@ export default function App() {
           notificationCount={notificationCount}
         />
 
-        <main className="flex-1 overflow-hidden max-w-6xl mx-auto w-full px-4 pt-16 pb-12 bg-dark-950">
+        <main className="flex-1 overflow-hidden max-w-6xl mx-auto w-full px-4 pt-16 pb-12">
           {activeTab === 'dashboard' && (
             <Dashboard
               notification={lastNotification}
