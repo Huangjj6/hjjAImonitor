@@ -171,7 +171,7 @@ function buildFallbackNarration(aiResult, title) {
  * @param {string} summary - 热点摘要
  * @param {string} source - 来源
  * @param {string} credibilityTier - 来源可信度标签（official/media/blog/social/unknown）
- * @returns {Object} { isRelevant, isFake, score, reason, contentSubject, matchMode, confidence, sentiment, entities }
+ * @returns {Object} { isRelevant, isFake, score, reason, contentSubject, matchMode, confidence, entities }
  */
 async function verifyHotspot(keyword, title, summary, source, credibilityTier = 'unknown') {
   if (!config.openrouter.apiKey) {
@@ -228,13 +228,10 @@ async function verifyHotspot(keyword, title, summary, source, credibilityTier = 
 - 标题是否有标题党/夸大/诱导点击的嫌疑？
 - 内容是否为广告软文、蹭热度、或虚假信息？
 
-第四步：情感分析
-- 内容对关键词的情感倾向是正面/负面/中立？
-
-第五步：确信度评估
+第四步：确信度评估
 - 你对以上判断有多大把握？考虑信息完整性、来源可信度等因素
 
-第六步：提取关联实体
+第五步：提取关联实体
 - 文中还提到了哪些与关键词相关的关键实体？
 
 =====
@@ -253,7 +250,6 @@ JSON：
   "isFake": true/false,
   "score": 0.0-1.0,
   "confidence": 0.0-1.0,
-  "sentiment": "positive|negative|neutral",
   "entities": ["实体1", "实体2"],
   "reason": "判断理由(60字内)"
 }`;

@@ -258,7 +258,7 @@ async function scanKeyword(kw) {
       const aiRaw = batchResults[j];
       const aiResult = aiRaw.status === 'fulfilled'
         ? aiRaw.value
-        : { isRelevant: true, isFake: false, score: 0.5, reason: 'AI验证失败，默认通过', contentSubject: '', matchMode: 'error', confidence: 0, sentiment: 'neutral', entities: [] };
+        : { isRelevant: true, isFake: false, score: 0.5, reason: 'AI验证失败，默认通过', contentSubject: '', matchMode: 'error', confidence: 0, entities: [] };
 
       const credibilityTier = getCredibilityTier(item.source, item.url);
       const finalScore = computeFinalScore(aiResult.score, credibilityTier, kw.keyword, item.title, item.published_at);
@@ -285,7 +285,7 @@ async function scanKeyword(kw) {
           aiScore: aiResult.score, finalScore,
           contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
           isRelevant: false, isFake: true,
-          confidence: aiResult.confidence, sentiment: aiResult.sentiment, entities: aiResult.entities,
+          confidence: aiResult.confidence, entities: aiResult.entities,
           saved: true, action: 'fake',
           reviewed: false,
         });
@@ -300,7 +300,7 @@ async function scanKeyword(kw) {
           aiScore: aiResult.score, finalScore,
           contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
           isRelevant: aiResult.isRelevant, isFake: aiResult.isFake,
-          confidence: aiResult.confidence, sentiment: aiResult.sentiment, entities: aiResult.entities,
+          confidence: aiResult.confidence, entities: aiResult.entities,
           saved: false, action: 'low_score',
           reviewed: false,
         });
@@ -314,7 +314,7 @@ async function scanKeyword(kw) {
           aiScore: aiResult.score, finalScore,
           contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
           isRelevant: false, isFake: false,
-          confidence: aiResult.confidence, sentiment: aiResult.sentiment, entities: aiResult.entities,
+          confidence: aiResult.confidence, entities: aiResult.entities,
           saved: false, action: 'irrelevant',
           reviewed: false,
         });
@@ -341,7 +341,7 @@ async function scanKeyword(kw) {
         aiScore: aiResult.score, finalScore,
         contentSubject: aiResult.contentSubject, matchMode: aiResult.matchMode,
         isRelevant: true, isFake: false,
-        confidence: aiResult.confidence, sentiment: aiResult.sentiment, entities: aiResult.entities,
+        confidence: aiResult.confidence, entities: aiResult.entities,
         saved: true, action: 'saved',
         reviewed: false,
       });
